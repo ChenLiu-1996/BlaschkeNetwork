@@ -22,11 +22,6 @@ from nn_utils.seed import seed_everything
 def load_mnist(args):
     # Load MNIST
     transform_train = transforms.Compose([
-        torchvision.transforms.RandomResizedCrop(
-            32,
-            scale=(0.9, 1.1),
-            interpolation=torchvision.transforms.InterpolationMode.
-            BICUBIC),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.1307],
