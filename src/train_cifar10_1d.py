@@ -93,7 +93,7 @@ if __name__ == '__main__':
     seed_everything(args.random_seed)
     train_loader, val_loader = load_cifar10(args)
 
-    image_channels = 1
+    image_channels = 3
     model = BlaschkeNetwork1d(layers_hidden=[image_channels, *args.layers])
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
@@ -114,7 +114,7 @@ if __name__ == '__main__':
             train_loss, train_acc = 0, 0
             for i, (images, labels) in enumerate(train_loader):
                 optimizer.zero_grad()
-                images = images.view(images.shape[0], 3, -1)
+                images = images.view(images.shape[0], image_channels, -1)
                 output = model(images)
                 output = torch.real(output)
                 loss = criterion(output, labels.to(device))
@@ -135,7 +135,7 @@ if __name__ == '__main__':
             val_loss, val_acc = 0, 0
             with torch.no_grad():
                 for i, (images, labels) in enumerate(val_loader):
-                    images = images.view(images.shape[0], 3, -1)
+                    images = images.view(images.shape[0], image_channels, -1)
                     output = model(images)
                     output = torch.real(output)
                     val_loss += criterion(output, labels.to(device)).item()

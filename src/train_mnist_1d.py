@@ -104,7 +104,7 @@ if __name__ == '__main__':
             train_loss, train_acc = 0, 0
             for i, (images, labels) in enumerate(train_loader):
                 optimizer.zero_grad()
-                images = images.view(images.shape[0], -1)
+                images = images.view(images.shape[0], image_channels, -1)
                 output = model(images)
                 output = torch.real(output)
                 loss = criterion(output, labels.to(device))
@@ -125,7 +125,7 @@ if __name__ == '__main__':
             val_loss, val_acc = 0, 0
             with torch.no_grad():
                 for i, (images, labels) in enumerate(val_loader):
-                    images = images.view(images.shape[0], -1)
+                    images = images.view(images.shape[0], image_channels, -1)
                     output = model(images)
                     output = torch.real(output)
                     val_loss += criterion(output, labels.to(device)).item()
