@@ -3,6 +3,13 @@ import torch.nn as nn
 from typing import List
 
 
+def count_parameters(model, trainable_only: bool = False):
+    if not trainable_only:
+        return sum(p.numel() for p in model.parameters())
+    else:
+        return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
 class BlaschkeLayer1d(nn.Module):
     """
     Blaschke Layer for 1d signal.
@@ -30,8 +37,8 @@ class BlaschkeLayer1d(nn.Module):
 
         # Initialize learnable parameters for computing Blaschke product
         self.proj_learnable = proj_learnable
-        self.alpha = nn.Parameter(torch.empty(1, 1, in_dim, nb_blaschke, dtype=torch.float32))
-        self.log_beta = nn.Parameter(torch.empty(1, 1, in_dim, nb_blaschke, dtype=torch.float32))
+        self.alpha = nn.Parameter(torch.empty(1, 1, out_dim, nb_blaschke, dtype=torch.float32))
+        self.log_beta = nn.Parameter(torch.empty(1, 1, out_dim, nb_blaschke, dtype=torch.float32))
 
         # Projection parameter: fixed or learnable
         self.projection = nn.Parameter(torch.empty(in_dim, out_dim, dtype=torch.float32), requires_grad=proj_learnable)
@@ -107,14 +114,15 @@ class BlaschkeLayer1d(nn.Module):
         # Channel first to channel last. [B, L, C_in]
         x = x.transpose(1, 2)
 
+        # Compute the projection. [B, L, C_out]
+        x = x @ (self.projection / torch.sum(self.projection, dim=0))
+
         # Add a dimension for number of Blaschke components.
         x = x.unsqueeze(-1)
 
-        # Compute the Blaschke factors $\theta(x)$. [B, L, C_in]
+        # Compute the Blaschke factors $\theta(x)$. [B, L, C_out]
         blaschke_factors = self._compute_blaschke_factors(x)
-
-        # # Compute the projection. [B, L, C_out]
-        out = blaschke_factors @ self.projection * (1 / torch.sum(self.projection, dim=0))
+        out = blaschke_factors
 
         # # Transform into the complex domain. [B, L, C_out]
         # out = torch.exp(1j * out)
@@ -192,6 +200,9 @@ class BlaschkeNetwork1d(nn.Module):
         self.classifier = nn.Linear(layers_hidden[-2], layers_hidden[-1])
 
         self.to(device)
+
+        print('Number of total parameters: ', count_parameters(self))
+        print('Number of trainable parameters: ', count_parameters(self, trainable_only=True))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
