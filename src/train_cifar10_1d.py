@@ -85,8 +85,8 @@ if __name__ == '__main__':
                         default=1)
     args = SimpleNamespace(**vars(parser.parse_args()))
 
-    model_save_path = f'../checkpoints/mnist/BN1d_{args.layers}_proj-learnable-{args.proj_learnable}_lr_{args.lr}_epoch_{args.num_epoch}-seed_{args.random_seed}/model_best_val_acc.ckpt'
-    results_dir = f'../results/mnist/BN1d_{args.layers}_proj-learnable-{args.proj_learnable}-lr_{args.lr}_epoch_{args.num_epoch}-seed_{args.random_seed}/'
+    model_save_path = f'../checkpoints/cifar10/BN1d_{args.layers}_proj-learnable-{args.proj_learnable}_lr_{args.lr}_epoch_{args.num_epoch}-seed_{args.random_seed}/model_best_val_acc.ckpt'
+    results_dir = f'../results/cifar10/BN1d_{args.layers}_proj-learnable-{args.proj_learnable}-lr_{args.lr}_epoch_{args.num_epoch}-seed_{args.random_seed}/'
     os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
     os.makedirs(results_dir, exist_ok=True)
 
