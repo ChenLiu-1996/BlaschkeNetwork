@@ -52,7 +52,7 @@ def load_mnist(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--layers',
-                        help='Example: `1 32 16 10`',
+                        help='Example: `32 16 10`',
                         nargs='+',
                         type=int)
     parser.add_argument('--proj-learnable',
@@ -105,6 +105,7 @@ if __name__ == '__main__':
             for i, (images, labels) in enumerate(train_loader):
                 optimizer.zero_grad()
                 images = images.view(images.shape[0], image_channels, -1)
+                images = images.to(device)
                 output = model(images)
                 output = torch.real(output)
                 loss = criterion(output, labels.to(device))
@@ -126,6 +127,7 @@ if __name__ == '__main__':
             with torch.no_grad():
                 for i, (images, labels) in enumerate(val_loader):
                     images = images.view(images.shape[0], image_channels, -1)
+                    images = images.to(device)
                     output = model(images)
                     output = torch.real(output)
                     val_loss += criterion(output, labels.to(device)).item()

@@ -34,10 +34,7 @@ class BlaschkeLayer1d(nn.Module):
         self.log_beta = nn.Parameter(torch.empty(1, 1, in_dim, nb_blaschke, dtype=torch.float32))
 
         # Projection parameter: fixed or learnable
-        # self.projection = nn.Parameter(torch.empty(in_dim, out_dim, dtype=torch.float32), requires_grad=proj_learnable)
-        self.projection = nn.Linear(in_dim, out_dim, dtype=torch.float32)
-        if not proj_learnable:
-            self.projection.requires_grad_(False)
+        self.projection = nn.Parameter(torch.empty(in_dim, out_dim, dtype=torch.float32), requires_grad=proj_learnable)
 
         # Initialize weights
         self.initialize_weights()
