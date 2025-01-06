@@ -94,7 +94,7 @@ if __name__ == '__main__':
     train_loader, val_loader = load_cifar10(args)
 
     image_channels = 3
-    model = BlaschkeNetwork1d(layers_hidden=[image_channels, *args.layers])
+    model = BlaschkeNetwork1d(layers_hidden=[image_channels, *args.layers], proj_learnable=args.proj_learnable)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
 
