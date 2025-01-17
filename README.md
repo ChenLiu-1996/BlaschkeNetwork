@@ -6,14 +6,12 @@
 We developed the codebase in a miniconda environment.
 Tested on Python 3.9.13 + PyTorch 1.12.1.
 How we created the conda environment:
-**Some packages may no longer be required.**
 ```
-conda create --name bn pytorch==1.12.1 torchvision==0.13.1 torchaudio==0.12.1 cudatoolkit=11.3 -c pytorch
-conda activate bn
+conda create --name bnet pytorch==1.12.1 torchvision==0.13.1 torchaudio==0.12.1 cudatoolkit=11.3 -c pytorch
+conda activate bnet
 conda install -c anaconda scikit-image pillow matplotlib seaborn tqdm
 python -m pip install tinyimagenet
 python -m pip install phate
-python -m pip install timm
 ```
 
 
