@@ -157,13 +157,13 @@ class BlaschkeNetwork1d(nn.Module):
         scaling_factor = signal_dim / num_blaschke_params
 
         self.param_net = nn.Sequential(
-            nn.Linear(signal_dim, int(num_blaschke_params * scaling_factor**0.7), bias=True),
+            nn.Linear(signal_dim, int(num_blaschke_params * scaling_factor**0.7)),
             nn.BatchNorm1d(int(num_blaschke_params * scaling_factor**0.7)),
             nn.ReLU(inplace=True),
-            nn.Linear(int(num_blaschke_params * scaling_factor**0.7), int(num_blaschke_params * scaling_factor**0.5), bias=True),
+            nn.Linear(int(num_blaschke_params * scaling_factor**0.7), int(num_blaschke_params * scaling_factor**0.5)),
             nn.BatchNorm1d(int(num_blaschke_params * scaling_factor**0.5)),
             nn.ReLU(inplace=True),
-            nn.Linear(int(num_blaschke_params * scaling_factor**0.5), num_blaschke_params, bias=False),
+            nn.Linear(int(num_blaschke_params * scaling_factor**0.5), num_blaschke_params),
         )
 
         # Initialize weights
@@ -180,7 +180,7 @@ class BlaschkeNetwork1d(nn.Module):
                                 device=device)
             )
 
-        num_features = sum(self.num_blaschke_list) * 4
+        num_features = sum(self.num_blaschke_list) * num_blaschke_params
         self.classifier = nn.Sequential(
             nn.Linear(num_features, num_features),
             nn.BatchNorm1d(num_features),
@@ -235,9 +235,13 @@ class BlaschkeNetwork1d(nn.Module):
             cumulative_product = blaschke_products[0]
             for blaschke_product in blaschke_products[1:]:
                 cumulative_product = cumulative_product * blaschke_product
-            curr_signal_approx = torch.real(layer.scale.unsqueeze(-1) * cumulative_product)
+
+            # Take the manigude of complex number.
+            curr_signal_approx = torch.abs(layer.scale.unsqueeze(-1) * cumulative_product)
             residual_signal = residual_signal - curr_signal_approx
-            residual_signals_sqsum = residual_signals_sqsum + residual_signal.pow(2)
+            residual_signals_sqsum = residual_signals_sqsum + residual_signal.pow(2).mean()
+            # Stop the gradient from passing to the next recurrence layer.
+            residual_signal = residual_signal.detach()
 
             # NOTE: Currently, the model is trained end-to-end, where the Blaschke parameters
             # are used for downstream classification, and the gradient for classification can be backproped
