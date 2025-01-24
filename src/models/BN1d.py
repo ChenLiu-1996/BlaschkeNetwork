@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 import torch.nn as nn
 from typing import List
@@ -18,7 +19,6 @@ class BlaschkeLayer1d(nn.Module):
 
     Attributes:
     -----------
-        signal_dim (int): Signal dimension
         eps (float): Small constant to prevent division by zero
         device (str): Device to run the computations ('cpu' or 'cuda')
         proj_learnable (bool, optional): If True, the projection matrix in each layer is learnable;
@@ -26,31 +26,16 @@ class BlaschkeLayer1d(nn.Module):
     '''
 
     def __init__(self,
-                 signal_dim: int,
+                 param_net: torch.nn.Module,
                  num_blaschke: int = 1,
                  eps: float = 1e-11,
                  device: str = 'cpu') -> None:
 
         super().__init__()
 
+        self.param_net = param_net
         self.num_blaschke = num_blaschke
         assert self.num_blaschke == 1, 'Current implementation only supports 1 Blaschke factor.'
-
-        # Initialize learnable parameters for computing Blaschke product.
-        # 4 output neurons, respectively for:
-        #   alpha, log_beta, scale_real, scale_imaginary
-        self.param_net = nn.Sequential(
-            nn.Linear(signal_dim, signal_dim//4),
-            nn.BatchNorm1d(signal_dim//4),
-            nn.ReLU(inplace=True),
-            nn.Linear(signal_dim//4, signal_dim//8),
-            nn.BatchNorm1d(signal_dim//8),
-            nn.ReLU(inplace=True),
-            nn.Linear(signal_dim//8, 4),
-        )
-
-        # Initialize weights
-        self.initialize_weights()
 
         # Set other parameters
         self.eps = eps
@@ -59,22 +44,6 @@ class BlaschkeLayer1d(nn.Module):
     def __repr__(self):
         return (f"BlaschkeLayer1d("
                 f"num_blaschke={self.num_blaschke})")
-
-    def initialize_weights(self) -> None:
-        '''Initialize the weights of the BlaschkeLayer1d.'''
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_uniform_(m.weight)
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
-
-            elif isinstance(m, nn.BatchNorm2d):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
-
-            elif isinstance(m, nn.Linear):
-                nn.init.kaiming_uniform_(m.weight)
-                nn.init.constant_(m.bias, 0)
 
     def activation(self, x: torch.Tensor) -> torch.Tensor:
         '''
@@ -181,13 +150,32 @@ class BlaschkeNetwork1d(nn.Module):
             # Determine Blaschke parameters if not provided
             self.num_blaschke_list = [1 for _ in range(self.layers)]
 
+        # Initialize learnable parameters for computing Blaschke product.
+        # 4 output neurons, respectively for:
+        #   alpha, log_beta, scale_real, scale_imaginary
+        num_blaschke_params = 4
+        scaling_factor = signal_dim / num_blaschke_params
+
+        self.param_net = nn.Sequential(
+            nn.Linear(signal_dim, int(num_blaschke_params * scaling_factor**0.7), bias=True),
+            nn.BatchNorm1d(int(num_blaschke_params * scaling_factor**0.7)),
+            nn.ReLU(inplace=True),
+            nn.Linear(int(num_blaschke_params * scaling_factor**0.7), int(num_blaschke_params * scaling_factor**0.5), bias=True),
+            nn.BatchNorm1d(int(num_blaschke_params * scaling_factor**0.5)),
+            nn.ReLU(inplace=True),
+            nn.Linear(int(num_blaschke_params * scaling_factor**0.5), num_blaschke_params, bias=False),
+        )
+
+        # Initialize weights
+        self.initialize_weights()
+
         # Initialize the BNLayers
         self.encoder = nn.ModuleList([])
 
         for layer_idx in range(self.layers):
             self.encoder.append(
-                BlaschkeLayer1d(signal_dim=self.signal_dim,
-                                num_blaschke=self.num_blaschke_list[layer_idx],
+                BlaschkeLayer1d(num_blaschke=self.num_blaschke_list[layer_idx],
+                                param_net=self.param_net,
                                 eps=eps,
                                 device=device)
             )
@@ -205,6 +193,22 @@ class BlaschkeNetwork1d(nn.Module):
 
         self.to(device)
 
+    def initialize_weights(self) -> None:
+        '''Initialize the weights of the BlaschkeLayer1d.'''
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_uniform_(m.weight)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+
+            elif isinstance(m, nn.Linear):
+                nn.init.kaiming_uniform_(m.weight)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         '''
@@ -235,6 +239,10 @@ class BlaschkeNetwork1d(nn.Module):
             residual_signal = residual_signal - curr_signal_approx
             residual_signals_sqsum = residual_signals_sqsum + residual_signal.pow(2)
 
+            # NOTE: Currently, the model is trained end-to-end, where the Blaschke parameters
+            # are used for downstream classification, and the gradient for classification can be backproped
+            # through the Blaschke networks (param_net).
+            # If you detach the gradient (by adding `.detach()` to the following line), the results will be disasterous.
             curr_parameters = torch.stack((layer.alpha, layer.beta, torch.real(layer.scale), torch.imag(layer.scale)), dim=1)
             if parameters_for_downstream is None:
                 parameters_for_downstream = curr_parameters
