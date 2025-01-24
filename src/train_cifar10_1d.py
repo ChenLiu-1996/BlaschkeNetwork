@@ -64,7 +64,7 @@ if __name__ == '__main__':
     parser.add_argument('--lr',
                         help='Learning rate.',
                         type=float,
-                        default=1e-3)
+                        default=1e-2)
     parser.add_argument('--batch-size',
                         type=int,
                         default=256)
