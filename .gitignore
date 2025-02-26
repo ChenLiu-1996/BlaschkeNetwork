@@ -1,5 +1,6 @@
 .vscode
 data
+bash
 **/__pycache__
 
 # Models

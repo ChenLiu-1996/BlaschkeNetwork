@@ -73,7 +73,7 @@ if __name__ == '__main__':
                         default=100)
     parser.add_argument('--loss-recon-coeff',
                         type=float,
-                        default=100.0)
+                        default=1.0)
     parser.add_argument('--num-workers',
                         type=int,
                         default=8)
@@ -92,14 +92,14 @@ if __name__ == '__main__':
     seed_everything(args.random_seed)
     train_loader, val_loader = load_cifar10(args)
 
-    model = BlaschkeNetwork1d(layers=args.layers, signal_dim=32*32*3)
+    model = BlaschkeNetwork1d(layers=args.layers, signal_len=32*32*3)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
 
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     scheduler = LinearWarmupCosineAnnealingLR(optimizer=optimizer,
                                               warmup_start_lr=args.lr * 1e-3,
-                                              warmup_epochs=min(10, args.num_epoch//5),
+                                              warmup_epochs=min(10, args.num_epoch//10),
                                               max_epochs=args.num_epoch)
 
     log('Training begins.', filepath=log_dir)

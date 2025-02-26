@@ -1,3 +1,7 @@
+'''
+https://github.com/lucidrains/vit-pytorch/blob/main/vit_pytorch/simple_vit_1d.py
+'''
+
 import torch
 from torch import nn
 
@@ -114,18 +118,18 @@ class Transformer1d(nn.Module):
 if __name__ == '__main__':
 
     model = Transformer1d(
-        seq_len = 256,
-        patch_size = 16,
-        num_classes = 1000,
-        dim = 1024,
-        depth = 6,
-        heads = 8,
-        mlp_dim = 2048,
-        dropout = 0.1,
-        emb_dropout = 0.1
+        seq_len=500,
+        patch_size=10,
+        num_classes=1000,
+        dim=1024,
+        depth=6,
+        heads=8,
+        mlp_dim=2048,
+        dropout=0.1,
+        emb_dropout=0.1
     )
 
-    time_series = torch.randn(4, 3, 256)
+    time_series = torch.randn(4, 3, 500)
     logits = model(time_series) # (4, 1000)
 
     print(f'logits shape: {logits.shape}')

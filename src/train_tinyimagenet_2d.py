@@ -9,36 +9,36 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import torchvision
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+from tinyimagenet import TinyImageNet
 
-from models.BN1d import BlaschkeNetwork1d
+from models.BN2d import BlaschkeNetwork2d
 from nn_utils.scheduler import LinearWarmupCosineAnnealingLR
 from nn_utils.seed import seed_everything
 from nn_utils.log import log, count_parameters
 
 
-def load_mnist(args):
-    # Load MNIST
+def load_tinyimagenet(args):
+    # Load Tiny-ImageNet
     transform_train = transforms.Compose([
         transforms.RandomAffine(degrees=10, translate=(0.1, 0.1)),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.1307],
-                              std=[0.3081])
+        transforms.Normalize(mean=(0.485, 0.456, 0.406),
+                              std=(0.229, 0.224, 0.225))
     ])
     transform_test = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.1307],
-                              std=[0.3081])
+        transforms.Normalize(mean=(0.485, 0.456, 0.406),
+                              std=(0.229, 0.224, 0.225))
     ])
-    train_set = torchvision.datasets.MNIST(
-        root="../data", train=True, download=True, transform=transform_train
+    train_set = TinyImageNet(
+        root="../data", split='train', transform=transform_train
     )
-    val_set = torchvision.datasets.MNIST(
-        root="../data", train=False, download=True, transform=transform_test
+    val_set = TinyImageNet(
+        root="../data", split='test', transform=transform_test
     )
     train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
     val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
@@ -54,7 +54,7 @@ if __name__ == '__main__':
     parser.add_argument('--lr',
                         help='Learning rate.',
                         type=float,
-                        default=1e-3)
+                        default=1e-2)
     parser.add_argument('--batch-size',
                         type=int,
                         default=256)
@@ -63,7 +63,7 @@ if __name__ == '__main__':
                         default=100)
     parser.add_argument('--loss-recon-coeff',
                         type=float,
-                        default=1.0)
+                        default=20.0)
     parser.add_argument('--num-workers',
                         type=int,
                         default=8)
@@ -72,17 +72,17 @@ if __name__ == '__main__':
                         default=1)
     args = SimpleNamespace(**vars(parser.parse_args()))
 
-    model_save_path = f'../checkpoints/mnist/BN1d_{args.layers}_lr_{args.lr}_epoch_{args.num_epoch}-seed_{args.random_seed}/model_best_val_acc.ckpt'
-    results_dir = f'../results/mnist/BN1d_{args.layers}_lr_{args.lr}_epoch_{args.num_epoch}-seed_{args.random_seed}/'
+    model_save_path = f'../checkpoints/tinyimagenet/BN2d_{args.layers}_lr_{args.lr}_epoch_{args.num_epoch}-seed_{args.random_seed}/model_best_val_acc.ckpt'
+    results_dir = f'../results/tinyimagenet/BN2d_{args.layers}_lr_{args.lr}_epoch_{args.num_epoch}-seed_{args.random_seed}/'
     log_dir = os.path.join(results_dir, 'log.txt')
 
     os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
     os.makedirs(results_dir, exist_ok=True)
 
     seed_everything(args.random_seed)
-    train_loader, val_loader = load_mnist(args)
+    train_loader, val_loader = load_tinyimagenet(args)
 
-    model = BlaschkeNetwork1d(layers=args.layers, signal_len=28*28*1, num_channels=1, patch_size=14)
+    model = BlaschkeNetwork2d(layers=args.layers, image_dim=(64, 64), num_channels=3, patch_size=4, out_classes=200)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
 
@@ -108,7 +108,6 @@ if __name__ == '__main__':
             train_loss, train_loss_recon, train_loss_pred, train_acc = 0, 0, 0, 0
             for i, (images, y_true) in enumerate(train_loader):
                 optimizer.zero_grad()
-                images = images.view(images.shape[0], 1, -1)
                 images = images.to(device)
                 y_pred, residual_signals_sqsum = model(images)
                 loss_recon = residual_signals_sqsum.mean()
@@ -137,7 +136,6 @@ if __name__ == '__main__':
             val_loss, val_loss_recon, val_loss_pred, val_acc = 0, 0, 0, 0
             with torch.no_grad():
                 for i, (images, y_true) in enumerate(val_loader):
-                    images = images.view(images.shape[0], 1, -1)
                     images = images.to(device)
                     y_pred, residual_signals_sqsum = model(images)
                     loss_recon = residual_signals_sqsum.mean()

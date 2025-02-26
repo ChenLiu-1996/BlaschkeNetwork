@@ -14,7 +14,7 @@ import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from models.BN1d import BlaschkeNetwork1d
+from models.BN2d import BlaschkeNetwork2d
 from nn_utils.scheduler import LinearWarmupCosineAnnealingLR
 from nn_utils.seed import seed_everything
 from nn_utils.log import log, count_parameters
@@ -72,8 +72,8 @@ if __name__ == '__main__':
                         default=1)
     args = SimpleNamespace(**vars(parser.parse_args()))
 
-    model_save_path = f'../checkpoints/mnist/BN1d_{args.layers}_lr_{args.lr}_epoch_{args.num_epoch}-seed_{args.random_seed}/model_best_val_acc.ckpt'
-    results_dir = f'../results/mnist/BN1d_{args.layers}_lr_{args.lr}_epoch_{args.num_epoch}-seed_{args.random_seed}/'
+    model_save_path = f'../checkpoints/mnist/BN2d_{args.layers}_lr_{args.lr}_epoch_{args.num_epoch}-seed_{args.random_seed}/model_best_val_acc.ckpt'
+    results_dir = f'../results/mnist/BN2d_{args.layers}_lr_{args.lr}_epoch_{args.num_epoch}-seed_{args.random_seed}/'
     log_dir = os.path.join(results_dir, 'log.txt')
 
     os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
@@ -82,7 +82,7 @@ if __name__ == '__main__':
     seed_everything(args.random_seed)
     train_loader, val_loader = load_mnist(args)
 
-    model = BlaschkeNetwork1d(layers=args.layers, signal_len=28*28*1, num_channels=1, patch_size=14)
+    model = BlaschkeNetwork2d(layers=args.layers, image_dim=(28, 28), num_channels=1, patch_size=1)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
 
@@ -108,7 +108,6 @@ if __name__ == '__main__':
             train_loss, train_loss_recon, train_loss_pred, train_acc = 0, 0, 0, 0
             for i, (images, y_true) in enumerate(train_loader):
                 optimizer.zero_grad()
-                images = images.view(images.shape[0], 1, -1)
                 images = images.to(device)
                 y_pred, residual_signals_sqsum = model(images)
                 loss_recon = residual_signals_sqsum.mean()
@@ -137,7 +136,6 @@ if __name__ == '__main__':
             val_loss, val_loss_recon, val_loss_pred, val_acc = 0, 0, 0, 0
             with torch.no_grad():
                 for i, (images, y_true) in enumerate(val_loader):
-                    images = images.view(images.shape[0], 1, -1)
                     images = images.to(device)
                     y_pred, residual_signals_sqsum = model(images)
                     loss_recon = residual_signals_sqsum.mean()
