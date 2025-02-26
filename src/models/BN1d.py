@@ -1,7 +1,9 @@
-import numpy as np
 import torch
 import torch.nn as nn
+import scipy.signal as signal
 from typing import List
+
+from models.transformer1d import Transformer1d
 
 
 class BlaschkeLayer1d(nn.Module):
@@ -10,8 +12,8 @@ class BlaschkeLayer1d(nn.Module):
     The input dimension is assumed to be [B, L, C].
 
     In Blaschke decomposition, a function F(x) can be approximated by
-    F(x) = b_1 * B_1 + b_2 * B_1 * B_2 + b_3 * B_1 * B_2 * B_3 + ...
-        where b_i is a scaling factor (scalar),
+    F(x) = s_1 * B_1 + s_2 * B_1 * B_2 + s_3 * B_1 * B_2 * B_3 + ...
+        where s_i is a scaling factor (scalar),
         and B_i is the i-th Blaschke product.
         B(x) = exp(i \theta(x)),
         \theta(x) = \sum_{j >= 0} \sigma ((x - \alpha_j) / \beta_j),
@@ -56,6 +58,11 @@ class BlaschkeLayer1d(nn.Module):
         '''
         Estimate the Blaschke parameters.
         '''
+        assert len(x.shape) == 2
+        x_real, x_imag = torch.real(x), torch.imag(x)
+        x = torch.stack((x_real, x_imag), dim=1).float()
+        assert len(x.shape) == 3
+
         params = self.param_net(x)
         assert len(params.shape) == 2 and params.shape[0] == x.shape[0] and params.shape[1] == 4
         alpha, log_beta, scale_real, scale_imag = params[:, 0], params[:, 1], params[:, 2], params[:, 3]
@@ -131,6 +138,7 @@ class BlaschkeNetwork1d(nn.Module):
 
     def __init__(self,
                  signal_dim: int,
+                 patch_size: int,
                  layers: int = 3,
                  out_classes: int = 10,
                  num_blaschke_list: List[int] = None,
@@ -154,16 +162,29 @@ class BlaschkeNetwork1d(nn.Module):
         # 4 output neurons, respectively for:
         #   alpha, log_beta, scale_real, scale_imaginary
         num_blaschke_params = 4
-        scaling_factor = signal_dim / num_blaschke_params
 
-        self.param_net = nn.Sequential(
-            nn.Linear(signal_dim, int(num_blaschke_params * scaling_factor**0.7)),
-            nn.BatchNorm1d(int(num_blaschke_params * scaling_factor**0.7)),
-            nn.ReLU(inplace=True),
-            nn.Linear(int(num_blaschke_params * scaling_factor**0.7), int(num_blaschke_params * scaling_factor**0.5)),
-            nn.BatchNorm1d(int(num_blaschke_params * scaling_factor**0.5)),
-            nn.ReLU(inplace=True),
-            nn.Linear(int(num_blaschke_params * scaling_factor**0.5), num_blaschke_params),
+        # scaling_factor = signal_dim / num_blaschke_params
+        # self.param_net = nn.Sequential(
+        #     nn.Linear(signal_dim * 2, int(num_blaschke_params * scaling_factor**0.7)),
+        #     nn.BatchNorm1d(int(num_blaschke_params * scaling_factor**0.7)),
+        #     nn.ReLU(inplace=True),
+        #     nn.Linear(int(num_blaschke_params * scaling_factor**0.7), int(num_blaschke_params * scaling_factor**0.5)),
+        #     nn.BatchNorm1d(int(num_blaschke_params * scaling_factor**0.5)),
+        #     nn.ReLU(inplace=True),
+        #     nn.Linear(int(num_blaschke_params * scaling_factor**0.5), num_blaschke_params),
+        # )
+
+        self.param_net = Transformer1d(
+            seq_len=signal_dim,
+            patch_size=patch_size,
+            channels=2,  # (real, imaginary)
+            num_classes=num_blaschke_params,
+            dim=256,
+            depth=2,
+            heads=8,
+            mlp_dim=128,
+            dropout=0.1,
+            emb_dropout=0.1
         )
 
         # Initialize weights
@@ -226,8 +247,11 @@ class BlaschkeNetwork1d(nn.Module):
         # Input should be a [B, L] signal.
         assert len(x.shape) == 2
 
+        # Compute the Z-transform using CZT (Chirp Z-transform).
+        signal_complex = torch.from_numpy(signal.czt(x)).to(x.device)
+
         blaschke_products = []
-        residual_signal, residual_signals_sqsum = x, 0
+        residual_signal, residual_signals_sqsum = signal_complex, 0
         parameters_for_downstream = None
 
         for layer in self.encoder:
@@ -237,16 +261,15 @@ class BlaschkeNetwork1d(nn.Module):
                 cumulative_product = cumulative_product * blaschke_product
 
             # Take the manigude of complex number.
-            curr_signal_approx = torch.abs(layer.scale.unsqueeze(-1) * cumulative_product)
+            curr_signal_approx = layer.scale.unsqueeze(-1) * cumulative_product
             residual_signal = residual_signal - curr_signal_approx
-            residual_signals_sqsum = residual_signals_sqsum + residual_signal.pow(2).mean()
+            residual_signals_sqsum = residual_signals_sqsum + torch.real(residual_signal).pow(2).mean()
             # Stop the gradient from passing to the next recurrence layer.
             residual_signal = residual_signal.detach()
 
             # NOTE: Currently, the model is trained end-to-end, where the Blaschke parameters
             # are used for downstream classification, and the gradient for classification can be backproped
             # through the Blaschke networks (param_net).
-            # If you detach the gradient (by adding `.detach()` to the following line), the results will be disasterous.
             curr_parameters = torch.stack((layer.alpha, layer.beta, torch.real(layer.scale), torch.imag(layer.scale)), dim=1)
             if parameters_for_downstream is None:
                 parameters_for_downstream = curr_parameters
@@ -266,7 +289,7 @@ class BlaschkeNetwork1d(nn.Module):
 
 
 if __name__ == '__main__':
-    model = BlaschkeNetwork1d(layers=3, signal_dim=100)
+    model = BlaschkeNetwork1d(layers=3, signal_dim=100, patch_size=20)
     x = torch.normal(0, 1, size=(32, 100))
     y, x_approximations = model(x)
 

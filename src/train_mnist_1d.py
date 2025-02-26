@@ -63,7 +63,7 @@ if __name__ == '__main__':
                         default=100)
     parser.add_argument('--loss-recon-coeff',
                         type=float,
-                        default=100.0)
+                        default=1.0)
     parser.add_argument('--num-workers',
                         type=int,
                         default=8)
@@ -82,7 +82,7 @@ if __name__ == '__main__':
     seed_everything(args.random_seed)
     train_loader, val_loader = load_mnist(args)
 
-    model = BlaschkeNetwork1d(layers=args.layers, signal_dim=28*28*1)
+    model = BlaschkeNetwork1d(layers=args.layers, signal_dim=28*28*1, patch_size=14)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
 
