@@ -83,6 +83,8 @@ def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes):
 @torch.no_grad()
 def infer(loader, model, loss_fn_pred, num_classes):
     loss, loss_recon, loss_pred, acc, auroc = 0, 0, 0, 0, 0
+    y_true_arr, y_pred_arr = None, None
+
     for x, y_true in loader:
         x = x.to(device)
         y_pred, residual_signals_sqsum = model(x)
@@ -166,7 +168,6 @@ if __name__ == '__main__':
     loss_fn_pred = nn.BCEWithLogitsLoss()
     train_acc_list, train_auroc_list, val_acc_list, val_auroc_list = [], [], [], []
     train_loss_recon_list, train_loss_pred_list, val_loss_recon_list, val_loss_pred_list = [], [], [], []
-    y_true_arr, y_pred_arr = None, None
 
     best_auroc = 0
     with tqdm(range(args.num_epoch)) as pbar:
