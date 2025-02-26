@@ -119,6 +119,7 @@ if __name__ == '__main__':
 
     model = Transformer1d(
         seq_len=500,
+        channels=3,
         patch_size=10,
         num_classes=1000,
         dim=1024,

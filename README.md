@@ -13,6 +13,7 @@ conda install -c anaconda scikit-image pillow matplotlib seaborn tqdm -y
 python -m pip install tinyimagenet
 python -m pip install phate
 python -m pip install einops
+python -m pip install wfdb
 python -m pip install numpy==1.26
 ```
 
