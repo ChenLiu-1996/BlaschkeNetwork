@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from sklearn.metrics import roc_auc_score, accuracy_score
+from sklearn.metrics import roc_auc_score, accuracy_score, precision_recall_curve
 
 from models.BN1d import BlaschkeNetwork1d
 from nn_utils.scheduler import LinearWarmupCosineAnnealingLR
@@ -35,7 +35,7 @@ def load_ptbxl(args):
     return train_loader, val_loader, test_loader, train_set.num_classes
 
 
-def train_epoch(train_loader, model, optimizer, loss_fn_pred):
+def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes):
     train_loss, train_loss_recon, train_loss_pred, train_acc, train_auroc = 0, 0, 0, 0, 0
     y_true_arr, y_pred_arr = None, None
 
@@ -63,15 +63,27 @@ def train_epoch(train_loader, model, optimizer, loss_fn_pred):
     train_loss_recon /= len(train_loader)
     train_loss_pred /= len(train_loader)
     train_loss /= len(train_loader)
-    train_acc = accuracy_score(y_true_arr, y_pred_arr.argmax(axis=1))
-    train_auroc = roc_auc_score(y_true_arr, y_pred_arr, multi_class='ovo', average='macro')
+
+    acc_by_class, auroc_by_class = [], []
+    for class_idx in range(num_classes):
+        precision, recall, thresholds = precision_recall_curve(y_true_arr[:, class_idx], y_pred_arr[:, class_idx])
+        numerator = 2 * recall * precision
+        denom = recall + precision
+        f1_scores = np.divide(numerator, denom, out=np.zeros_like(denom), where=(denom!=0))
+        max_f1_thresh = thresholds[np.argmax(f1_scores)]
+
+        acc_by_class.append(accuracy_score(y_true_arr[:, class_idx], (y_pred_arr[:, class_idx] > max_f1_thresh).astype(int)))
+        auroc_by_class.append(roc_auc_score(y_true_arr[:, class_idx], y_pred_arr[:, class_idx], average='macro'))
+
+    train_acc = np.mean(acc_by_class)
+    train_auroc = np.mean(auroc_by_class)
+
     return train_loss, train_loss_recon, train_loss_pred, train_acc, train_auroc
 
 @torch.no_grad()
-def infer(loader, model, loss_fn_pred):
+def infer(loader, model, loss_fn_pred, num_classes):
     loss, loss_recon, loss_pred, acc, auroc = 0, 0, 0, 0, 0
     for x, y_true in loader:
-        x = x.view(x.shape[0], -1)
         x = x.to(device)
         y_pred, residual_signals_sqsum = model(x)
         loss_recon = residual_signals_sqsum.mean()
@@ -92,8 +104,20 @@ def infer(loader, model, loss_fn_pred):
     loss_recon /= len(loader)
     loss_pred /= len(loader)
     loss /= len(loader)
-    acc = accuracy_score(y_true_arr, y_pred_arr.argmax(axis=1))
-    auroc = roc_auc_score(y_true_arr, y_pred_arr, multi_class='ovo', average='macro')
+
+    acc_by_class, auroc_by_class = [], []
+    for class_idx in range(num_classes):
+        precision, recall, thresholds = precision_recall_curve(y_true_arr[:, class_idx], y_pred_arr[:, class_idx])
+        numerator = 2 * recall * precision
+        denom = recall + precision
+        f1_scores = np.divide(numerator, denom, out=np.zeros_like(denom), where=(denom!=0))
+        max_f1_thresh = thresholds[np.argmax(f1_scores)]
+
+        acc_by_class.append(accuracy_score(y_true_arr[:, class_idx], (y_pred_arr[:, class_idx] > max_f1_thresh).astype(int)))
+        auroc_by_class.append(roc_auc_score(y_true_arr[:, class_idx], y_pred_arr[:, class_idx], average='macro'))
+
+    acc = np.mean(acc_by_class)
+    auroc = np.mean(auroc_by_class)
     return loss, loss_recon, loss_pred, acc, auroc
 
 
@@ -150,7 +174,7 @@ if __name__ == '__main__':
             # Train
             model.train()
             train_loss, train_loss_recon, train_loss_pred, train_acc, train_auroc = \
-                train_epoch(train_loader=train_loader, model=model, optimizer=optimizer, loss_fn_pred=loss_fn_pred)
+                train_epoch(train_loader=train_loader, model=model, optimizer=optimizer, loss_fn_pred=loss_fn_pred, num_classes=num_classes)
             train_loss_recon_list.append(train_loss_recon)
             train_loss_pred_list.append(train_loss_pred)
             train_acc_list.append(train_acc)
@@ -159,7 +183,7 @@ if __name__ == '__main__':
             # Validation
             model.eval()
             val_loss, val_loss_recon, val_loss_pred, val_acc, val_auroc = \
-                infer(loader=val_loader, model=model, loss_fn_pred=loss_fn_pred)
+                infer(loader=val_loader, model=model, loss_fn_pred=loss_fn_pred, num_classes=num_classes)
             val_loss_recon_list.append(val_loss_recon)
             val_loss_pred_list.append(val_loss_pred)
             val_acc_list.append(val_acc)
@@ -202,7 +226,7 @@ if __name__ == '__main__':
     # Testing
     model.eval()
     test_loss, test_loss_recon, test_loss_pred, test_acc, test_auroc = \
-        infer(loader=test_loader, model=model, loss_fn_pred=loss_fn_pred)
+        infer(loader=test_loader, model=model, loss_fn_pred=loss_fn_pred, num_classes=num_classes)
 
     log_string = f'\nTest recon loss = {test_loss_recon:.5f}, pred loss = {test_loss_pred:.3f}, acc = {100 * test_acc:.3f}, auroc = {100 * test_auroc:.3f}.'
     log(log_string, filepath=log_dir, to_console=False)
