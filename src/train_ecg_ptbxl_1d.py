@@ -10,7 +10,6 @@ from tqdm import tqdm
 from sklearn.metrics import roc_auc_score, accuracy_score, precision_recall_curve
 
 from models.BN1d import BlaschkeNetwork1d
-from nn_utils.scheduler import LinearWarmupCosineAnnealingLR
 from nn_utils.seed import seed_everything
 from nn_utils.log import log, count_parameters
 from dataset.ecg_datasets import get_ecg_dataset
@@ -121,7 +120,7 @@ def infer(loader, model, loss_fn_pred, num_classes):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--layers', type=int, default=1)
-    parser.add_argument('--lr', help='Learning rate.', type=float, default=1e-2)
+    parser.add_argument('--lr', help='Learning rate.', type=float, default=0.3)
     parser.add_argument('--batch-size', type=int, default=256)
     parser.add_argument('--num-epoch', type=int, default=100)
     parser.add_argument('--loss-recon-coeff', type=float, default=1.0)
@@ -150,11 +149,12 @@ if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
 
-    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-5)
-    scheduler = LinearWarmupCosineAnnealingLR(optimizer=optimizer,
-                                              warmup_start_lr=args.lr * 1e-3,
-                                              warmup_epochs=min(10, args.num_epoch//5),
-                                              max_epochs=args.num_epoch)
+    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(
+        optimizer,
+        milestones=[40],
+        gamma=0.1,
+        last_epoch=-1)
 
     log('Training begins.', filepath=log_dir)
     log(f'Number of total parameters: {count_parameters(model)}', filepath=log_dir)
