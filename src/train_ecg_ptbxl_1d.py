@@ -36,7 +36,7 @@ def load_ptbxl(args):
 
 
 def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes):
-    train_loss, train_loss_recon, train_loss_pred, train_acc, train_auroc = 0, 0, 0, 0, 0
+    train_loss_recon, train_loss_pred, train_acc, train_auroc = 0, 0, 0, 0
     y_true_arr, y_pred_arr = None, None
 
     for (x, y_true) in train_loader:
@@ -51,7 +51,6 @@ def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes):
 
         train_loss_recon += loss_recon.item()
         train_loss_pred += loss_pred.item()
-        train_loss += loss.item()
 
         if y_true_arr is None:
             y_true_arr = y_true.detach().cpu().numpy()
@@ -62,7 +61,6 @@ def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes):
 
     train_loss_recon /= len(train_loader)
     train_loss_pred /= len(train_loader)
-    train_loss /= len(train_loader)
 
     acc_by_class, auroc_by_class = [], []
     for class_idx in range(num_classes):
@@ -78,11 +76,11 @@ def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes):
     train_acc = np.mean(acc_by_class)
     train_auroc = np.mean(auroc_by_class)
 
-    return train_loss, train_loss_recon, train_loss_pred, train_acc, train_auroc
+    return train_loss_recon, train_loss_pred, train_acc, train_auroc
 
 @torch.no_grad()
 def infer(loader, model, loss_fn_pred, num_classes):
-    loss, loss_recon, loss_pred, acc, auroc = 0, 0, 0, 0, 0
+    avg_loss_recon, avg_loss_pred, acc, auroc = 0, 0, 0, 0
     y_true_arr, y_pred_arr = None, None
 
     for x, y_true in loader:
@@ -90,11 +88,9 @@ def infer(loader, model, loss_fn_pred, num_classes):
         y_pred, residual_signals_sqsum = model(x)
         loss_recon = residual_signals_sqsum.mean()
         loss_pred = loss_fn_pred(y_pred, y_true.to(device))
-        loss = loss_recon * args.loss_recon_coeff + loss_pred
 
-        loss_recon += loss_recon.item()
-        loss_pred += loss_pred.item()
-        loss += loss.item()
+        avg_loss_recon += loss_recon.item()
+        avg_loss_pred += loss_pred.item()
 
         if y_true_arr is None:
             y_true_arr = y_true.detach().cpu().numpy()
@@ -103,9 +99,8 @@ def infer(loader, model, loss_fn_pred, num_classes):
             y_true_arr = np.vstack((y_true_arr, y_true.detach().cpu().numpy()))
             y_pred_arr = np.vstack((y_pred_arr, y_pred.detach().cpu().numpy()))
 
-    loss_recon /= len(loader)
-    loss_pred /= len(loader)
-    loss /= len(loader)
+    avg_loss_recon /= len(loader)
+    avg_loss_pred /= len(loader)
 
     acc_by_class, auroc_by_class = [], []
     for class_idx in range(num_classes):
@@ -120,7 +115,7 @@ def infer(loader, model, loss_fn_pred, num_classes):
 
     acc = np.mean(acc_by_class)
     auroc = np.mean(auroc_by_class)
-    return loss, loss_recon, loss_pred, acc, auroc
+    return avg_loss_recon, avg_loss_pred, acc, auroc
 
 
 if __name__ == '__main__':
@@ -174,7 +169,7 @@ if __name__ == '__main__':
         for epoch in pbar:
             # Train
             model.train()
-            train_loss, train_loss_recon, train_loss_pred, train_acc, train_auroc = \
+            train_loss_recon, train_loss_pred, train_acc, train_auroc = \
                 train_epoch(train_loader=train_loader, model=model, optimizer=optimizer, loss_fn_pred=loss_fn_pred, num_classes=num_classes)
             train_loss_recon_list.append(train_loss_recon)
             train_loss_pred_list.append(train_loss_pred)
@@ -183,7 +178,7 @@ if __name__ == '__main__':
 
             # Validation
             model.eval()
-            val_loss, val_loss_recon, val_loss_pred, val_acc, val_auroc = \
+            val_loss_recon, val_loss_pred, val_acc, val_auroc = \
                 infer(loader=val_loader, model=model, loss_fn_pred=loss_fn_pred, num_classes=num_classes)
             val_loss_recon_list.append(val_loss_recon)
             val_loss_pred_list.append(val_loss_pred)
@@ -226,7 +221,7 @@ if __name__ == '__main__':
 
     # Testing
     model.eval()
-    test_loss, test_loss_recon, test_loss_pred, test_acc, test_auroc = \
+    test_loss_recon, test_loss_pred, test_acc, test_auroc = \
         infer(loader=test_loader, model=model, loss_fn_pred=loss_fn_pred, num_classes=num_classes)
 
     log_string = f'\nTest recon loss = {test_loss_recon:.5f}, pred loss = {test_loss_pred:.3f}, acc = {100 * test_acc:.3f}, auroc = {100 * test_auroc:.3f}.'
