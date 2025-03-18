@@ -122,7 +122,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--layers', type=int, default=1)
     parser.add_argument('--lr', help='Learning rate.', type=float, default=1e-1)
-    parser.add_argument('--batch-size', type=int, default=256)
+    parser.add_argument('--batch-size', type=int, default=64)
     parser.add_argument('--num-epoch', type=int, default=100)
     parser.add_argument('--loss-recon-coeff', type=float, default=1.0)
     parser.add_argument('--num-workers', type=int, default=8)
@@ -136,8 +136,8 @@ if __name__ == '__main__':
     ROOT_DIR = '/'.join(os.path.realpath(__file__).split('/')[:-2])
     args.data_dir = args.data_dir.replace('$ROOT_DIR', ROOT_DIR)
 
-    model_save_path = f'../checkpoints/ECG_PTBXL/subset={args.subset}_BN1d_{args.layers}_lr_{args.lr}_epoch_{args.num_epoch}-seed_{args.random_seed}/model_best_val_auroc.ckpt'
-    results_dir = f'../results/ECG_PTBXL/subset={args.subset}_BN1d_{args.layers}_lr_{args.lr}_epoch_{args.num_epoch}-seed_{args.random_seed}/'
+    model_save_path = f'../checkpoints/ECG_PTBXL/subset={args.subset}-percentage_{args.training_percentage}_BN1d_{args.layers}_lr_{args.lr}_epoch_{args.num_epoch}-seed_{args.random_seed}/model_best_val_auroc.ckpt'
+    results_dir = f'../results/ECG_PTBXL/subset={args.subset}-percentage_{args.training_percentage}_BN1d_{args.layers}_lr_{args.lr}_epoch_{args.num_epoch}-seed_{args.random_seed}/'
     log_dir = os.path.join(results_dir, 'log.txt')
 
     os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
