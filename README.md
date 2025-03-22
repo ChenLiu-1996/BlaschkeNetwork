@@ -1,5 +1,13 @@
 # Blaschke Network
 
+## Background
+Relevant papers for Blaschke decomposition:
+1. [Multiscale decompositions of Hardy spaces](https://arxiv.org/pdf/2101.05311).
+2. [On Complex Analytic tools, and the Holomorphic Rotation methods](https://arxiv.org/pdf/2210.01949).
+The analytical decomposition in this code base was based on:
+[Carrier frequencies, holomorphy and unwinding](https://arxiv.org/pdf/1606.06475) and
+adapted from [the official MATLAB codebase](https://github.com/hautiengwu/BlaschkeDecomposition).
+
 ## Preparation
 
 ### Environment
