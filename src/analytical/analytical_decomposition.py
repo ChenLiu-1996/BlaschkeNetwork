@@ -96,10 +96,13 @@ def blaschke_decomposition(signal: np.ndarray,
     '''
     Blaschke decomposition.
 
-    F(z) = B(z) G(z) = B(z) (G(0) + G(z) - G(0))
-    * Let B_1(z) G_1(z) = G(z) - G(0)
-    F(z) = B(z) (G(0) + B_1(z) G_1(z)) = G(0) B(z) + G_1(z) B(z) B_1(z)
-    * Let s_1 = G(0), s_2 = G_1(z), ...
+    F(z) = B_1(z) G_1(z) = B_1(z) (G_1(0) + G_1(z) - G_1(0))
+    * Let B_2(z) G_2(z) = G_1(z) - G_1(0)
+    F(z) = B_1(z) (G_1(0) + B_2(z) G_2(z))
+         = G_1(0) B_1(z) + G_2(z) B_1(z) B_2(z)
+         = G_1(0) B_1(z) + G_2(0) B_1(z) B_2(z) + G_3(z) B_1(z) B_2(z) B_3(z)
+         = ...
+    * Let s_1 = G_1(0), s_2 = G_2(0), ...
     F(z) = s_1 B_1 + s_2 B_1 B_2 + ...
 
     NOTE:
