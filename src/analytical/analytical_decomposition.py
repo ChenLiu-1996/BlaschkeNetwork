@@ -103,11 +103,11 @@ def blaschke_decomposition(signal: np.ndarray,
          = G_1(0) B_1(z) + G_2(0) B_1(z) B_2(z) + G_3(z) B_1(z) B_2(z) B_3(z)
          = ...
     * Let s_1 = G_1(0), s_2 = G_2(0), ...
-    F(z) = s_1 B_1 + s_2 B_1 B_2 + ...
+    F(z) = s_1 B_1(z) + s_2 B_1(z) B_2(z) + ...
 
     NOTE:
-    `blaschke_factor` at each iteration corresponds to `B_i`.
-    `curr_G` at each iteration corresponds to `G_i`.
+    `blaschke_factor` at each iteration corresponds to `B_i(z)`.
+    `curr_G` at each iteration corresponds to `G_i(z)`.
     When lowpass_order = 1, `low_freq_component` at each iteration will correspond to `s_i`.
 
     signal: the input signal. Assume shape (signal_len,). CUrrently only support 1-channel signals.
