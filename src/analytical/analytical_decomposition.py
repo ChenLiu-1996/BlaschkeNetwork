@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from scipy.signal import hilbert
 
 
-def decompose_blaschke_products(high_freq_component: np.ndarray,
+def decompose_blaschke_factors(high_freq_component: np.ndarray,
                                 fourier_poly_order: int,
                                 oversampling_rate: int,
                                 eps: float):
@@ -103,7 +103,7 @@ def blaschke_decomposition(signal: np.ndarray,
     F(z) = s_1 B_1 + s_2 B_1 B_2 + ...
 
     NOTE: When lowpass_order = 1, `low_freq_component` at each iteration will correspond to `s_i`.
-    `blaschke_product` at each iteration corresponds to `B_i`.
+    `blaschke_factor` at each iteration corresponds to `B_i`.
 
     signal: the input signal. Assume shape (signal_len,). CUrrently only support 1-channel signals.
     time: the input time. Assume shape (signal_len,)
@@ -115,12 +115,15 @@ def blaschke_decomposition(signal: np.ndarray,
     eps: value of the threshold to cut the signal
     '''
 
+    # Complexify the signal with Hilbert transform after removing zero-order drift.
     signal = hilbert(signal - np.mean(signal))
+    # Frequency shifting by carrier frequency.
     signal = signal * np.exp(1j * 2 * np.pi * carrier_freq * time)
+    # Only keep the non-negative frequencies.
     signal_conjugate_symmetric = np.concatenate((signal, np.fliplr(np.conj(signal).reshape(1, -1)).squeeze()))
-    mask = np.ones(len(signal_conjugate_symmetric))
-    mask[int(len(signal_conjugate_symmetric)/2):] = 0
-    signal = np.fft.ifft(np.fft.fft(signal_conjugate_symmetric) * mask)
+    mask_nonnegative_freq = np.ones(len(signal_conjugate_symmetric))
+    mask_nonnegative_freq[int(len(signal_conjugate_symmetric)/2):] = 0
+    signal = np.fft.ifft(np.fft.fft(signal_conjugate_symmetric) * mask_nonnegative_freq)
     signal = signal.reshape(1, -1)
 
     num_channels, signal_len = signal.shape
@@ -132,14 +135,14 @@ def blaschke_decomposition(signal: np.ndarray,
 
     # First iteration of decomposition.
     high_freq_component, low_freq_component = decompose_by_frequency(signal, fourier_poly_order, oversampling_rate, lowpass_order)
-    curr_blaschke_factor, curr_G = decompose_blaschke_products(high_freq_component, fourier_poly_order, oversampling_rate, eps)
+    curr_blaschke_factor, curr_G = decompose_blaschke_factors(high_freq_component, fourier_poly_order, oversampling_rate, eps)
     blaschke_product = curr_blaschke_factor
     blaschke_factor = curr_blaschke_factor
 
     # All remaining iterations.
     for _ in range(1, num_blaschke_iters):
         curr_high_freq_component, curr_low_freq_component = decompose_by_frequency(curr_G.reshape(1, -1), fourier_poly_order, oversampling_rate, lowpass_order)
-        curr_blaschke_factor, curr_G = decompose_blaschke_products(curr_high_freq_component, fourier_poly_order, oversampling_rate, eps)
+        curr_blaschke_factor, curr_G = decompose_blaschke_factors(curr_high_freq_component, fourier_poly_order, oversampling_rate, eps)
 
         low_freq_component = np.concatenate((low_freq_component, curr_low_freq_component), axis=0)
         blaschke_factor = np.concatenate((blaschke_factor, curr_blaschke_factor), axis=0)
@@ -166,7 +169,7 @@ if __name__ == '__main__':
     carrier_freq = 10
 
     # Blaschke decomposition.
-    low_freq_component, blaschke_product, cumulative_blaschke_product = blaschke_decomposition(
+    low_freq_component, _, blaschke_product = blaschke_decomposition(
         signal=signal_arr,
         time=time_arr,
         num_blaschke_iters=num_blaschke_iters,
@@ -183,12 +186,12 @@ if __name__ == '__main__':
     for total_order in range(1, blaschke_order + 1):
         for curr_order in range(1, total_order + 1):
             ax[total_order - 1, curr_order].plot(time_arr, low_freq_component[curr_order].real, label = f'$G_{curr_order}$', color='black')
-            ax[total_order - 1, curr_order].plot(time_arr, (cumulative_blaschke_product[curr_order-1] * low_freq_component[curr_order]).real, label = f'$G_{curr_order}$ * prod(..., $B_{curr_order}$)', color='green', alpha=0.6)
+            ax[total_order - 1, curr_order].plot(time_arr, (blaschke_product[curr_order-1] * low_freq_component[curr_order]).real, label = f'$G_{curr_order}$ * prod(..., $B_{curr_order}$)', color='green', alpha=0.6)
             ax[total_order - 1, curr_order].legend(loc='lower left')
 
     final = 0
     for curr_order in range(1, blaschke_order + 1):
-        final += (cumulative_blaschke_product[curr_order-1] * low_freq_component[curr_order]).real
+        final += (blaschke_product[curr_order-1] * low_freq_component[curr_order]).real
         ax[curr_order - 1, blaschke_order + 1].plot(time_arr, signal_arr, label = 'original signal', color='firebrick', alpha=0.8)
         ax[curr_order - 1, blaschke_order + 1].plot(time_arr, final, label = 'reconstruction', color='skyblue', alpha=0.9)
         ax[curr_order - 1, blaschke_order + 1].plot(time_arr, final - signal_arr, label = 'residual', color='gray', alpha=1.0)

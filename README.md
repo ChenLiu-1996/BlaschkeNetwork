@@ -4,6 +4,7 @@
 Relevant papers for Blaschke decomposition:
 1. [Multiscale decompositions of Hardy spaces](https://arxiv.org/pdf/2101.05311).
 2. [On Complex Analytic tools, and the Holomorphic Rotation methods](https://arxiv.org/pdf/2210.01949).
+3. [Nonlinear Phase Unwinding of Functions](https://arxiv.org/pdf/1508.01241)
 
 Our [analytical decomposition](src/analytical/analytical_decomposition.py) was based on:
 [Carrier frequencies, holomorphy and unwinding](https://arxiv.org/pdf/1606.06475) and
