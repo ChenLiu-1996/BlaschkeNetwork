@@ -121,7 +121,7 @@ def infer(loader, model, loss_fn_pred, num_classes):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--layers', type=int, default=1)
-    parser.add_argument('--lr', help='Learning rate.', type=float, default=1e-1)
+    parser.add_argument('--lr', help='Learning rate.', type=float, default=1e-2)
     parser.add_argument('--batch-size', type=int, default=64)
     parser.add_argument('--num-epoch', type=int, default=100)
     parser.add_argument('--loss-recon-coeff', type=float, default=1.0)
