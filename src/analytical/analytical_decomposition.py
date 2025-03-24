@@ -139,10 +139,11 @@ def blaschke_decomposition(signal: np.ndarray,
         raise ValueError('The code only supports one channel signal right now')
 
     # First iteration of decomposition.
-    high_freq_component, low_freq_component = decompose_by_frequency(signal, fourier_poly_order, oversampling_rate, lowpass_order)
-    curr_blaschke_factor, curr_G = decompose_blaschke_factors(high_freq_component, fourier_poly_order, oversampling_rate, eps)
-    blaschke_product = curr_blaschke_factor
+    curr_high_freq_component, curr_low_freq_component = decompose_by_frequency(signal, fourier_poly_order, oversampling_rate, lowpass_order)
+    curr_blaschke_factor, curr_G = decompose_blaschke_factors(curr_high_freq_component, fourier_poly_order, oversampling_rate, eps)
+    low_freq_component = curr_low_freq_component
     blaschke_factor = curr_blaschke_factor
+    blaschke_product = curr_blaschke_factor
 
     # All remaining iterations.
     for _ in range(1, num_blaschke_iters):
@@ -157,6 +158,21 @@ def blaschke_decomposition(signal: np.ndarray,
     blaschke_product = blaschke_product[:, :int(blaschke_product.shape[1]/2)] * np.tile(np.exp(-1j * 2 * np.pi * carrier_freq * time_arr), (num_blaschke_iters, 1))
 
     return low_freq_component, blaschke_factor, blaschke_product
+
+def display_blaschke_product(order: int):
+    '''
+    A helper function to print the blaschke product in cumulative product.
+    '''
+    blaschke_product_str = ''
+    if order == 1:
+        blaschke_product_str += 'B_1'
+    elif order == 2:
+        blaschke_product_str += '(B_1 * B_2)'
+    elif order == 3:
+        blaschke_product_str += '(B_1 * B_2 * B_3)'
+    else:
+        blaschke_product_str += f'(B_1 * B_2 *...* B_{order})'
+    return blaschke_product_str
 
 
 if __name__ == '__main__':
@@ -183,16 +199,20 @@ if __name__ == '__main__':
         lowpass_order=lowpass_order,
         carrier_freq=carrier_freq)
 
-    fig, ax = plt.subplots(blaschke_order, blaschke_order + 2, figsize = (24, 16))
+    fig, ax = plt.subplots(blaschke_order, blaschke_order + 2, figsize = (26, 16))
     for total_order in range(blaschke_order):
         ax[total_order, 0].plot(time_arr, signal_arr, label = 'original signal', color='firebrick', alpha=0.8)
         ax[total_order, 0].legend(loc='lower left')
+        ax[total_order, 0].spines['top'].set_visible(False)
+        ax[total_order, 0].spines['right'].set_visible(False)
 
     for total_order in range(1, blaschke_order + 1):
         for curr_order in range(1, total_order + 1):
-            ax[total_order - 1, curr_order].plot(time_arr, low_freq_component[curr_order].real, label = f'$G_{curr_order}$', color='black')
-            ax[total_order - 1, curr_order].plot(time_arr, (blaschke_product[curr_order-1] * low_freq_component[curr_order]).real, label = f'$G_{curr_order}$ * prod(..., $B_{curr_order}$)', color='green', alpha=0.6)
+            ax[total_order - 1, curr_order].plot(time_arr, low_freq_component[curr_order].real, label = f'$G_{curr_order}$', color='darkblue', linestyle='--')
+            ax[total_order - 1, curr_order].plot(time_arr, (blaschke_product[curr_order-1] * low_freq_component[curr_order]).real, label = f'$G_{curr_order}$ * ${display_blaschke_product(curr_order)}$', color='darkgreen', alpha=0.6)
             ax[total_order - 1, curr_order].legend(loc='lower left')
+            ax[total_order - 1, curr_order].spines['top'].set_visible(False)
+            ax[total_order - 1, curr_order].spines['right'].set_visible(False)
 
     final = 0
     for curr_order in range(1, blaschke_order + 1):
@@ -201,6 +221,8 @@ if __name__ == '__main__':
         ax[curr_order - 1, blaschke_order + 1].plot(time_arr, final, label = 'reconstruction', color='skyblue', alpha=0.9)
         ax[curr_order - 1, blaschke_order + 1].plot(time_arr, final - signal_arr, label = 'residual', color='gray', alpha=1.0)
         ax[curr_order - 1, blaschke_order + 1].legend(loc='lower left')
+        ax[curr_order - 1, blaschke_order + 1].spines['top'].set_visible(False)
+        ax[curr_order - 1, blaschke_order + 1].spines['right'].set_visible(False)
 
     # Remove axes from unused subplots
     for i in range(blaschke_order):
