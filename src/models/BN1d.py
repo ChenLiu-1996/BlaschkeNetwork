@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import numpy as np
 from scipy.signal import hilbert
 from typing import List
 from einops import rearrange
@@ -19,7 +20,7 @@ class BlaschkeLayer1d(nn.Module):
     In Blaschke decomposition, a function F(x) can be approximated by
     F(x) = s_1 * B_1 + s_2 * B_1 * B_2 + s_3 * B_1 * B_2 * B_3 + ...
         where s_i is a scaling factor (scalar),
-        and B_i is the i-th Blaschke product.
+        and B_i is the i-th Blaschke factor.
         B(x) = exp(i \theta(x)),
         \theta(x) = \sum_{j >= 0} \sigma ((x - \alpha_j) / \beta_j),
         \sigma(x) = \arctan(x) + \pi / 2
@@ -81,7 +82,7 @@ class BlaschkeLayer1d(nn.Module):
         self.scale = scale_real + 1j * scale_imag
         return
 
-    def compute_blaschke_product(self, x: torch.Tensor) -> torch.Tensor:
+    def compute_blaschke_factor(self, x: torch.Tensor) -> torch.Tensor:
         '''
         Compute the $B(x)$ for the input x.
 
@@ -97,9 +98,9 @@ class BlaschkeLayer1d(nn.Module):
         '''
         frac = (rearrange(x, 'b c l -> b (c l)') - self.alpha.unsqueeze(-1)) / self.beta.unsqueeze(-1)
         theta_x = self.activation(frac)
-        blaschke_product = torch.exp(1j * theta_x)
-        blaschke_product = rearrange(blaschke_product, 'b (c l) -> b c l', c=x.shape[1], l=x.shape[2])
-        return blaschke_product
+        blaschke_factor = torch.exp(1j * theta_x)
+        blaschke_factor = rearrange(blaschke_factor, 'b (c l) -> b c l', c=x.shape[1], l=x.shape[2])
+        return blaschke_factor
 
     def to(self, device: str):
         super().to(device)
@@ -130,8 +131,8 @@ class BlaschkeLayer1d(nn.Module):
 
         # Compute the Blaschke product $B(x)$. [B, C, L]
         self.estimate_blaschke_parameters(x)
-        blaschke_product = self.compute_blaschke_product(x)
-        return blaschke_product
+        blaschke_factor = self.compute_blaschke_factor(x)
+        return blaschke_factor
 
 
 class BlaschkeNetwork1d(nn.Module):
@@ -249,6 +250,23 @@ class BlaschkeNetwork1d(nn.Module):
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
 
+    def complexify(self, x: torch.Tensor, carrier_freq: float = 0) -> torch.Tensor:
+        '''
+        Complexify the input signal for Blaschke decomposition.
+        '''
+        _, _, signal_len = x.shape
+        signal = x.cpu().detach().numpy()
+        # Complexify the signal with Hilbert transform after removing zero-order drift.
+        signal = hilbert(signal - np.mean(signal, axis=2, keepdims=True))
+        # Frequency shifting by carrier frequency.
+        signal = signal * np.exp(1j * 2 * np.pi * carrier_freq * np.arange(signal_len))
+        # Only keep the non-negative frequencies.
+        signal_conjugate_symmetric = np.concatenate((signal, np.fliplr(np.conj(signal))), axis=2)
+        mask_nonnegative_freq = np.ones(signal_len * 2)
+        mask_nonnegative_freq[signal_len:] = 0
+        signal = np.fft.ifft(np.fft.fft(signal_conjugate_symmetric) * mask_nonnegative_freq)
+        return signal
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         '''
         Args:
@@ -269,25 +287,27 @@ class BlaschkeNetwork1d(nn.Module):
 
         # Complexify the signal using hilbert transform.
         # Real part is the same. Imaginary part is the Hilbert transform of the real part.
-        signal_complex = torch.from_numpy(hilbert(x.cpu().detach().numpy())).to(x.device)
+        # signal_complex = torch.from_numpy(hilbert((x).cpu().detach().numpy())).to(x.device)
+        signal_complex = self.complexify(x)
 
-        blaschke_products = []
+        blaschke_factors = []
         residual_signal, residual_signals_sqsum = signal_complex, 0
         parameters_for_downstream = None
 
         for layer in self.encoder:
-            blaschke_products.append(layer(residual_signal))
+            blaschke_factors.append(layer(residual_signal))
 
             # This is B_1 * B_2 * ... * B_n.
-            cumulative_product = blaschke_products[0]
-            for blaschke_product in blaschke_products[1:]:
-                cumulative_product = cumulative_product * blaschke_product
+            blaschke_product = blaschke_factors[0]
+            for blaschke_factor in blaschke_factors[1:]:
+                blaschke_product = blaschke_product * blaschke_factor
 
             # This is s_n * B_1 * B_2 * ... * B_n.
-            curr_signal_approx = layer.scale.unsqueeze(-1).unsqueeze(-1) * cumulative_product
+            curr_signal_approx = layer.scale.unsqueeze(-1).unsqueeze(-1) * blaschke_product
 
             residual_signal = residual_signal - curr_signal_approx
-            residual_signals_sqsum = residual_signals_sqsum + torch.real(residual_signal).pow(2).mean()
+            # residual_signals_sqsum = residual_signals_sqsum + torch.real(residual_signal).pow(2).mean()
+            residual_signals_sqsum = torch.real(residual_signal).pow(2).mean()
 
             # NOTE: Currently, the model is trained end-to-end, where the Blaschke parameters
             # are used for downstream classification, and the gradient for classification can be backproped

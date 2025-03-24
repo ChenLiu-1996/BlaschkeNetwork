@@ -128,7 +128,7 @@ if __name__ == '__main__':
     parser.add_argument('--num-workers', type=int, default=8)
     parser.add_argument('--random-seed', type=int, default=1)
     parser.add_argument('--subset', type=str, default='form')
-    parser.add_argument('--patch-size', type=int, default=50)
+    parser.add_argument('--patch-size', type=int, default=10)
     parser.add_argument('--training-percentage', type=int, default=100)
     parser.add_argument('--data-dir', type=str, default='$ROOT_DIR/data/')
     args = SimpleNamespace(**vars(parser.parse_args()))

@@ -4,43 +4,41 @@ import matplotlib.pyplot as plt
 from scipy.signal import hilbert
 
 
-def decompose_blaschke_factors(high_freq_component: np.ndarray,
-                                fourier_poly_order: int,
-                                oversampling_rate: int,
-                                eps: float):
+def decompose_blaschke_factors(signal: np.ndarray,
+                               fourier_poly_order: int,
+                               oversampling_rate: int,
+                               eps: float):
     '''
-    high_freq_component: the high-frequency component of the signal. Assume shape (signal_len,)
+    signal: Assume shape (signal_len,)
     fourier_poly_order: the degree of Fourier polynomial. Used to truncated the functions B & G.
     oversampling_rate: oversampling rate
     eps: value of the threshold to cut the signal
     '''
 
-    num_channels, signal_len = high_freq_component.shape
+    num_channels, signal_len = signal.shape
     half_signal_len = signal_len // 2
     time_idx = np.arange(1, oversampling_rate * signal_len + 1)
 
     # Oversampling.
-    high_freq_fft = np.fft.fft(high_freq_component)
-    high_freq_fft_oversampled = np.zeros((num_channels, signal_len * oversampling_rate), dtype=complex)
-    high_freq_fft_oversampled[:, 0:half_signal_len] = high_freq_fft[:, 0 :half_signal_len] * oversampling_rate
-    high_freq_oversampled = np.fft.ifft(high_freq_fft_oversampled)
+    signal_fft = np.fft.fft(signal)
+    signal_fft_oversampled = np.zeros((num_channels, signal_len * oversampling_rate), dtype=complex)
+    signal_fft_oversampled[:, 0:half_signal_len] = signal_fft[:, 0 :half_signal_len] * oversampling_rate
+    signal_oversampled = np.fft.ifft(signal_fft_oversampled)
 
-    # Step 2: evaluate G
-    # compute log(abs(Hi)) of the analytic function Hi
-    signal_amplitude = np.abs(high_freq_oversampled)
+    # Compute G and B.
+    signal_amplitude = np.abs(signal_oversampled)
     if np.min(signal_amplitude) < eps * np.max(signal_amplitude):
         # Avoid division by zero
         eps2 = (eps * np.max(signal_amplitude))**2
-        log_abs_high_freq = 0.5 * np.log(signal_amplitude**2 + eps2)
+        log_abs_signal = 0.5 * np.log(signal_amplitude**2 + eps2)
     else:
-        log_abs_high_freq = np.log(signal_amplitude)
+        log_abs_signal = np.log(signal_amplitude)
 
-    # Ana_log_abs_Hi = P_+(ln|Hi|)
-    mean_signal = np.mean(log_abs_high_freq)
-    Ana_log_abs_F = mean_signal + 2 * np.fft.ifft(np.fft.fft(log_abs_high_freq - mean_signal) * (time_idx < (fourier_poly_order + 1)))
+    mean_signal = np.mean(log_abs_signal)
+    log_abs_high_freq = mean_signal + 2 * np.fft.ifft(np.fft.fft(log_abs_signal - mean_signal) * (time_idx < (fourier_poly_order + 1)))
 
-    G_oversampled = np.fft.ifft(np.fft.fft(np.exp(Ana_log_abs_F)) * (time_idx < (fourier_poly_order + 1)))
-    blaschke_factor_oversampled = high_freq_oversampled / G_oversampled
+    G_oversampled = np.fft.ifft(np.fft.fft(np.exp(log_abs_high_freq)) * (time_idx < (fourier_poly_order + 1)))
+    blaschke_factor_oversampled = signal_oversampled / G_oversampled
 
     G = np.zeros((num_channels, signal_len), dtype = complex)
     blaschke_factor = np.zeros((num_channels, signal_len), dtype = complex)
