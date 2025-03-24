@@ -183,11 +183,11 @@ if __name__ == '__main__':
     signal_arr = np.array(signal_df[1])
 
     # Parameters for Blaschke decomposition.
-    num_blaschke_iters = 7
-    oversampling_rate = 16
-    lowpass_order = 1
-    blaschke_order = num_blaschke_iters - 1
-    carrier_freq = 10
+    num_blaschke_iters = 7                   # Using 7 for best visualization.
+    oversampling_rate = 2                    # At least 2, otherwise will have undersampling issue.
+    lowpass_order = 1                        # Has to be 1 to parameterize `s_i`. Higher gives better approximation.
+    blaschke_order = num_blaschke_iters - 1  # By definition. Do not change.
+    carrier_freq = 0                         # Seems unnecessary.
 
     # Blaschke decomposition.
     low_freq_component, _, blaschke_product = blaschke_decomposition(
