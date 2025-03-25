@@ -197,7 +197,7 @@ class BlaschkeNetwork1d(nn.Module):
         num_blaschke_params = 4
 
         self.param_net = Transformer1d(
-            seq_len=signal_len,
+            seq_len=signal_len * 2,     # complexification doubles length.
             patch_size=patch_size,
             channels=2 * num_channels,  # (real, imaginary)
             num_classes=num_blaschke_params,
@@ -265,6 +265,7 @@ class BlaschkeNetwork1d(nn.Module):
         mask_nonnegative_freq = np.ones(signal_len * 2)
         mask_nonnegative_freq[signal_len:] = 0
         signal = np.fft.ifft(np.fft.fft(signal_conjugate_symmetric) * mask_nonnegative_freq)
+        signal = torch.from_numpy(signal).to(x.device)
         return signal
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -291,7 +292,7 @@ class BlaschkeNetwork1d(nn.Module):
         signal_complex = self.complexify(x)
 
         blaschke_factors = []
-        residual_signal, residual_signals_sqsum = signal_complex, 0
+        residual_signal, residual_sqnorm = signal_complex, 0
         parameters_for_downstream = None
 
         for layer in self.encoder:
@@ -307,7 +308,7 @@ class BlaschkeNetwork1d(nn.Module):
 
             residual_signal = residual_signal - curr_signal_approx
             # residual_signals_sqsum = residual_signals_sqsum + torch.real(residual_signal).pow(2).mean()
-            residual_signals_sqsum = torch.real(residual_signal).pow(2).mean()
+            residual_sqnorm = torch.real(residual_signal).pow(2).mean()
 
             # NOTE: Currently, the model is trained end-to-end, where the Blaschke parameters
             # are used for downstream classification, and the gradient for classification can be backproped
@@ -320,7 +321,7 @@ class BlaschkeNetwork1d(nn.Module):
 
         y_pred = self.classifier(parameters_for_downstream)
 
-        return y_pred, residual_signals_sqsum
+        return y_pred, residual_sqnorm
 
 
     def to(self, device: str):
