@@ -197,7 +197,7 @@ class BlaschkeNetwork1d(nn.Module):
         num_blaschke_params = 4
 
         self.param_net = Transformer1d(
-            seq_len=signal_len * 2,     # complexification doubles length.
+            seq_len=signal_len,
             patch_size=patch_size,
             channels=2 * num_channels,  # (real, imaginary)
             num_classes=num_blaschke_params,
@@ -287,8 +287,6 @@ class BlaschkeNetwork1d(nn.Module):
         assert len(x.shape) == 3
 
         # Complexify the signal using hilbert transform.
-        # Real part is the same. Imaginary part is the Hilbert transform of the real part.
-        # signal_complex = torch.from_numpy(hilbert((x).cpu().detach().numpy())).to(x.device)
         signal_complex = self.complexify(x)
 
         blaschke_factors = []
@@ -307,8 +305,7 @@ class BlaschkeNetwork1d(nn.Module):
             curr_signal_approx = layer.scale.unsqueeze(-1).unsqueeze(-1) * blaschke_product
 
             residual_signal = residual_signal - curr_signal_approx
-            # residual_signals_sqsum = residual_signals_sqsum + torch.real(residual_signal).pow(2).mean()
-            residual_sqnorm = torch.real(residual_signal).pow(2).mean()
+            residual_sqnorm = residual_sqnorm + torch.real(residual_signal).pow(2).mean()
 
             # NOTE: Currently, the model is trained end-to-end, where the Blaschke parameters
             # are used for downstream classification, and the gradient for classification can be backproped
