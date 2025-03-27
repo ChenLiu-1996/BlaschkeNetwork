@@ -197,7 +197,7 @@ class BlaschkeNetwork1d(nn.Module):
         num_blaschke_params = 4
 
         self.param_net = Transformer1d(
-            seq_len=signal_len,
+            seq_len=signal_len * 2,     # complexification doubles length.
             patch_size=patch_size,
             channels=2 * num_channels,  # (real, imaginary)
             num_classes=num_blaschke_params,
