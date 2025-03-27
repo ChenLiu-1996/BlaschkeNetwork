@@ -167,13 +167,13 @@ class BlaschkeNetwork1d(nn.Module):
                  signal_len: int,
                  num_channels: int = 1,
                  patch_size: int = 1,
-                 layers: int = 5,
+                 layers: int = 1,
                  out_classes: int = 10,
                  num_blaschke_list: List[int] = None,
-                 param_net_dim: int = 256,
+                 param_net_dim: int = 64,
                  param_net_depth: int = 2,
-                 param_net_heads: int = 8,
-                 param_net_mlp_dim: int = 256,
+                 param_net_heads: int = 4,
+                 param_net_mlp_dim: int = 64,
                  eps: float = 1e-6,
                  device: str = 'cpu',
                  seed: int = 1) -> None:
@@ -304,8 +304,12 @@ class BlaschkeNetwork1d(nn.Module):
             # This is s_n * B_1 * B_2 * ... * B_n.
             curr_signal_approx = layer.scale.unsqueeze(-1).unsqueeze(-1) * blaschke_product
 
+            # F_{n+1} = F_n - s_n * B_1 * ... * B_n.
             residual_signal = residual_signal - curr_signal_approx
             residual_sqnorm = residual_sqnorm + torch.real(residual_signal).pow(2).mean()
+
+            # Detach the gradient so that each iteration is penalized separately.
+            residual_signal = residual_signal.detach()
 
             # NOTE: Currently, the model is trained end-to-end, where the Blaschke parameters
             # are used for downstream classification, and the gradient for classification can be backproped
