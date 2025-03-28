@@ -14,6 +14,7 @@ from nn_utils.scheduler import LinearWarmupCosineAnnealingLR
 from nn_utils.seed import seed_everything
 from nn_utils.log import log, count_parameters
 from dataset.ecg_datasets import get_ecg_dataset
+from analytical.analytical_decomposition import blaschke_decomposition
 
 
 def load_ptbxl(args):
@@ -45,6 +46,11 @@ def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes):
         y_pred, residual_sqnorm = model(x)
         loss_recon = residual_sqnorm.mean()
         loss_pred = loss_fn_pred(y_pred, y_true.to(device))
+
+        import pdb; pdb.set_trace()
+        signal = x[0, 0, :].detach().cpu().numpy()
+        blaschke_decomposition(signal=signal, time=np.arange(len(signal)), num_blaschke_iters=5, fourier_poly_order=len(signal), oversampling_rate=2, lowpass_order=1, carrier_freq=0)
+
         loss = loss_recon * args.loss_recon_coeff + loss_pred
         loss.backward()
         optimizer.step()
@@ -127,7 +133,7 @@ if __name__ == '__main__':
     parser.add_argument('--loss-recon-coeff', type=float, default=0.1)
     parser.add_argument('--num-workers', type=int, default=8)
     parser.add_argument('--random-seed', type=int, default=1)
-    parser.add_argument('--subset', type=str, default='superclass')
+    parser.add_argument('--subset', type=str, default='super_class')
     parser.add_argument('--patch-size', type=int, default=50)
     parser.add_argument('--training-percentage', type=int, default=100)
     parser.add_argument('--data-dir', type=str, default='$ROOT_DIR/data/')

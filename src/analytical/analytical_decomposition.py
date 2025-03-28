@@ -87,9 +87,9 @@ def blaschke_decomposition(signal: np.ndarray,
                            time: np.ndarray,
                            num_blaschke_iters: int,
                            fourier_poly_order: int,
-                           oversampling_rate: int,
-                           lowpass_order: int,
-                           carrier_freq: float,
+                           oversampling_rate: int = 2,
+                           lowpass_order: int = 1,
+                           carrier_freq: float = 0,
                            eps: float = 1e-4):
     '''
     Blaschke decomposition.
@@ -123,11 +123,12 @@ def blaschke_decomposition(signal: np.ndarray,
     # Frequency shifting by carrier frequency.
     signal = signal * np.exp(1j * 2 * np.pi * carrier_freq * time)
     # Only keep the non-negative frequencies.
-    signal_conjugate_symmetric = np.concatenate((signal, np.fliplr(np.conj(signal).reshape(1, -1)).squeeze()))
-    mask_nonnegative_freq = np.ones(len(signal_conjugate_symmetric))
-    mask_nonnegative_freq[int(len(signal_conjugate_symmetric)/2):] = 0
-    signal = np.fft.ifft(np.fft.fft(signal_conjugate_symmetric) * mask_nonnegative_freq)
+    # signal_conjugate_symmetric = np.concatenate((signal, np.fliplr(np.conj(signal).reshape(1, -1)).squeeze()))
+    # mask_nonnegative_freq = np.ones(len(signal_conjugate_symmetric))
+    # mask_nonnegative_freq[int(len(signal_conjugate_symmetric)/2):] = 0
+    # signal = np.fft.ifft(np.fft.fft(signal_conjugate_symmetric) * mask_nonnegative_freq)
     signal = signal.reshape(1, -1)
+    # import pdb; pdb.set_trace()
 
     num_channels, signal_len = signal.shape
 
@@ -153,7 +154,7 @@ def blaschke_decomposition(signal: np.ndarray,
         blaschke_product = np.concatenate((blaschke_product, blaschke_product[-1] * curr_blaschke_factor), axis=0)
 
     low_freq_component = low_freq_component[:, :int(low_freq_component.shape[1]/2)]
-    blaschke_product = blaschke_product[:, :int(blaschke_product.shape[1]/2)] * np.tile(np.exp(-1j * 2 * np.pi * carrier_freq * time_arr), (num_blaschke_iters, 1))
+    blaschke_product = blaschke_product[:, :int(blaschke_product.shape[1]/2)] * np.tile(np.exp(-1j * 2 * np.pi * carrier_freq * time), (num_blaschke_iters, 1))
 
     return low_freq_component, blaschke_factor, blaschke_product
 
