@@ -268,6 +268,25 @@ class BlaschkeNetwork1d(nn.Module):
         signal = torch.from_numpy(signal).to(x.device)
         return signal
 
+def complexify_signal(signal: np.ndarray, carrier_freq: float = 0) -> np.ndarray:
+    '''
+    Complexify the signal with Hilbert transform after removing zero-order drift
+    '''
+    assert len(signal.shape) == 2
+
+    signal = hilbert(signal - np.mean(signal, axis=1, keepdims=True))
+    # Frequency shifting by carrier frequency.
+    time_indices = np.arange(signal.shape[-1])
+    signal = signal * np.exp(1j * 2 * np.pi * carrier_freq * time_indices)
+    # Mitigate boundary effects. This is a common approach when performing Fourier analyses, spectral filtering, etc.
+    signal_boundary_smoothed = np.concatenate((signal, np.fliplr(np.conj(signal))), axis=1)
+    mask_nonnegative_freq = np.ones_like(signal_boundary_smoothed)
+    mask_nonnegative_freq[:, mask_nonnegative_freq.shape[1] // 2:] = 0
+    signal = np.fft.ifft(np.fft.fft(signal_boundary_smoothed) * mask_nonnegative_freq)
+    signal = signal[:, :signal.shape[1] // 2]
+    return signal
+
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         '''
         Args:
