@@ -87,10 +87,11 @@ def decompose_by_frequency(signal: np.ndarray,
 
 def complexify_signal(signal: np.ndarray, carrier_freq: float = 0) -> np.ndarray:
     '''
-    Complexify the signal with Hilbert transform after removing zero-order drift
+    Complexify the signal for Blaschke decomposition.
     '''
     assert len(signal.shape) == 2
 
+    # Hilbert transform after removing zero-order drift.
     signal = hilbert(signal - np.mean(signal, axis=1, keepdims=True))
     # Frequency shifting by carrier frequency.
     time_indices = np.arange(signal.shape[-1])

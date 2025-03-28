@@ -197,7 +197,7 @@ class BlaschkeNetwork1d(nn.Module):
         num_blaschke_params = 4
 
         self.param_net = Transformer1d(
-            seq_len=signal_len * 2,     # complexification doubles length.
+            seq_len=signal_len,
             patch_size=patch_size,
             channels=2 * num_channels,  # (real, imaginary)
             num_classes=num_blaschke_params,
@@ -252,40 +252,26 @@ class BlaschkeNetwork1d(nn.Module):
 
     def complexify(self, x: torch.Tensor, carrier_freq: float = 0) -> torch.Tensor:
         '''
-        Complexify the input signal for Blaschke decomposition.
+        Complexify the signal for Blaschke decomposition.
         '''
-        _, _, signal_len = x.shape
         signal = x.cpu().detach().numpy()
-        # Complexify the signal with Hilbert transform after removing zero-order drift.
-        signal = hilbert(signal - np.mean(signal, axis=2, keepdims=True))
+        signal = rearrange(signal, 'b c l -> (b c) l')  # b: batch size, c: number of channels, l: signal length.
+        # Hilbert transform after removing zero-order drift.
+        signal = hilbert(signal - np.mean(signal, axis=1, keepdims=True))
         # Frequency shifting by carrier frequency.
-        signal = signal * np.exp(1j * 2 * np.pi * carrier_freq * np.arange(signal_len))
-        # Only keep the non-negative frequencies.
-        signal_conjugate_symmetric = np.concatenate((signal, np.fliplr(np.conj(signal))), axis=2)
-        mask_nonnegative_freq = np.ones(signal_len * 2)
-        mask_nonnegative_freq[signal_len:] = 0
-        signal = np.fft.ifft(np.fft.fft(signal_conjugate_symmetric) * mask_nonnegative_freq)
+        time_indices = np.arange(x.shape[-1])
+        signal = signal * np.exp(1j * 2 * np.pi * carrier_freq * time_indices)
+        # Mitigate boundary effects. This is a common approach when performing Fourier analyses, spectral filtering, etc.
+        signal_boundary_smoothed = np.concatenate((signal, np.fliplr(np.conj(signal))), axis=1)
+        mask_nonnegative_freq = np.ones_like(signal_boundary_smoothed)
+        mask_nonnegative_freq[:, mask_nonnegative_freq.shape[1] // 2:] = 0
+        signal = np.fft.ifft(np.fft.fft(signal_boundary_smoothed) * mask_nonnegative_freq)
+        signal = signal[:, :signal.shape[1] // 2]
+        signal = rearrange(signal, '(b c) l -> b c l', b=x.shape[0], c=x.shape[1])
+
+        # Cast to torch Tensor.
         signal = torch.from_numpy(signal).to(x.device)
         return signal
-
-def complexify_signal(signal: np.ndarray, carrier_freq: float = 0) -> np.ndarray:
-    '''
-    Complexify the signal with Hilbert transform after removing zero-order drift
-    '''
-    assert len(signal.shape) == 2
-
-    signal = hilbert(signal - np.mean(signal, axis=1, keepdims=True))
-    # Frequency shifting by carrier frequency.
-    time_indices = np.arange(signal.shape[-1])
-    signal = signal * np.exp(1j * 2 * np.pi * carrier_freq * time_indices)
-    # Mitigate boundary effects. This is a common approach when performing Fourier analyses, spectral filtering, etc.
-    signal_boundary_smoothed = np.concatenate((signal, np.fliplr(np.conj(signal))), axis=1)
-    mask_nonnegative_freq = np.ones_like(signal_boundary_smoothed)
-    mask_nonnegative_freq[:, mask_nonnegative_freq.shape[1] // 2:] = 0
-    signal = np.fft.ifft(np.fft.fft(signal_boundary_smoothed) * mask_nonnegative_freq)
-    signal = signal[:, :signal.shape[1] // 2]
-    return signal
-
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         '''
