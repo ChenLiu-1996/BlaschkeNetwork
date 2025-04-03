@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 import numpy as np
 from scipy.signal import hilbert
 from typing import List
@@ -45,7 +46,7 @@ class BlaschkeLayer1d(nn.Module):
         self.num_blaschke = num_blaschke
         assert self.num_blaschke == 1, 'Current implementation only supports 1 Blaschke factor.'
 
-        # Set other parameters
+        self.dummy_tensor = torch.ones(1, dtype=torch.float32, requires_grad=True)  # To facilitate checkpointing.
         self.eps = eps
         self.to(device)
 
@@ -63,18 +64,22 @@ class BlaschkeLayer1d(nn.Module):
     def estimate_blaschke_parameters(self, x: torch.Tensor) -> torch.Tensor:
         '''
         Estimate the Blaschke parameters.
+        Using gradient checkpointing to trade time for space.
+        Otherwise it is easy to OOM when using many layers.
 
         Args:
         -----
             x : 3D torch.float
                 inputs, shape [B, C, L] (number of samples, channel, signal length)
         '''
+
         assert len(x.shape) == 3
         x_real, x_imag = torch.real(x), torch.imag(x)
         x = torch.cat((x_real, x_imag), dim=1).float()
         assert len(x.shape) == 3
 
-        params = self.param_net(x)
+        params = checkpoint(self.param_net, x, self.dummy_tensor)
+
         assert len(params.shape) == 2 and params.shape[0] == x.shape[0] and params.shape[1] == 4
         alpha, log_beta, scale_real, scale_imag = params[:, 0], params[:, 1], params[:, 2], params[:, 3]
         self.alpha = alpha
@@ -135,6 +140,26 @@ class BlaschkeLayer1d(nn.Module):
         return blaschke_factor
 
 
+class Ignore2ndArg(nn.Module):
+    '''
+    This is a module wrapper that essentially ignores the 2nd input argument.
+    The reason for using it is that sometimes we need to use checkpointing
+    to trade time for space, but when we use the checkpointing on the first
+    module of the neural network, it stupidly breaks the gradient, because
+    none of the inputs have `requires_grad=True`. As a workaround, we can
+    pass in a dummy vector that has `requires_grad=True` but ignore it
+    during computation.
+    '''
+    def __init__(self, module):
+        super().__init__()
+        self.module = module
+
+    def forward(self, x, dummy_arg=None):
+        assert dummy_arg is not None
+        x = self.module(x)
+        return x
+
+
 class BlaschkeNetwork1d(nn.Module):
     '''
     Blaschke Network for 1D signals.
@@ -171,7 +196,7 @@ class BlaschkeNetwork1d(nn.Module):
                  out_classes: int = 10,
                  num_blaschke_list: List[int] = None,
                  param_net_dim: int = 64,
-                 param_net_depth: int = 2,
+                 param_net_depth: int = 1,
                  param_net_heads: int = 4,
                  param_net_mlp_dim: int = 64,
                  eps: float = 1e-6,
@@ -196,18 +221,19 @@ class BlaschkeNetwork1d(nn.Module):
         #   alpha, log_beta, scale_real, scale_imaginary
         num_blaschke_params = 4
 
-        self.param_net = Transformer1d(
-            seq_len=signal_len,
-            patch_size=patch_size,
-            channels=2 * num_channels,  # (real, imaginary)
-            num_classes=num_blaschke_params,
-            dim=param_net_dim,
-            depth=param_net_depth,
-            heads=param_net_heads,
-            mlp_dim=param_net_mlp_dim,
-            dropout=0,
-            emb_dropout=0,
-        )
+        self.param_net = Ignore2ndArg(
+            Transformer1d(
+                seq_len=signal_len,     # complexification doubles length.
+                patch_size=patch_size,
+                channels=2 * num_channels,  # (real, imaginary)
+                num_classes=num_blaschke_params,
+                dim=param_net_dim,
+                depth=param_net_depth,
+                heads=param_net_heads,
+                mlp_dim=param_net_mlp_dim,
+                dropout=0,
+                emb_dropout=0,
+        ))  # `Ignore2ndArg` is a wrapper to facilitate checkpointing.
 
         # Initialize the BNLayers
         self.encoder = nn.ModuleList([])

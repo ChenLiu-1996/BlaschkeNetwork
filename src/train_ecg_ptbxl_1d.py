@@ -36,7 +36,7 @@ def load_ptbxl(args):
     return train_loader, val_loader, test_loader, train_set.num_classes
 
 
-def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes):
+def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes, device):
     train_loss_recon, train_loss_pred, train_acc, train_auroc = 0, 0, 0, 0
     y_true_arr, y_pred_arr = None, None
 
@@ -47,9 +47,8 @@ def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes):
         loss_recon = residual_sqnorm.mean()
         loss_pred = loss_fn_pred(y_pred, y_true.to(device))
 
-        import pdb; pdb.set_trace()
-        signal = x[0, 0, :].detach().cpu().numpy()
-        blaschke_decomposition(signal=signal, time=np.arange(len(signal)), num_blaschke_iters=5, fourier_poly_order=len(signal), oversampling_rate=2, lowpass_order=1, carrier_freq=0)
+        # signal = x[0, 0, :].detach().cpu().numpy()
+        # blaschke_decomposition(signal=signal, time=np.arange(len(signal)), num_blaschke_iters=5, fourier_poly_order=len(signal), oversampling_rate=2, lowpass_order=1, carrier_freq=0)
 
         loss = loss_recon * args.loss_recon_coeff + loss_pred
         loss.backward()
@@ -85,7 +84,7 @@ def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes):
     return train_loss_recon, train_loss_pred, train_acc, train_auroc
 
 @torch.no_grad()
-def infer(loader, model, loss_fn_pred, num_classes):
+def infer(loader, model, loss_fn_pred, num_classes, device):
     avg_loss_recon, avg_loss_pred, acc, auroc = 0, 0, 0, 0
     y_true_arr, y_pred_arr = None, None
 
@@ -123,31 +122,15 @@ def infer(loader, model, loss_fn_pred, num_classes):
     auroc = np.mean(auroc_by_class)
     return avg_loss_recon, avg_loss_pred, acc, auroc
 
+def main(args):
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--layers', type=int, default=1)
-    parser.add_argument('--lr', help='Learning rate.', type=float, default=1e-2)
-    parser.add_argument('--batch-size', type=int, default=256)
-    parser.add_argument('--num-epoch', type=int, default=100)
-    parser.add_argument('--loss-recon-coeff', type=float, default=0.1)
-    parser.add_argument('--num-workers', type=int, default=8)
-    parser.add_argument('--random-seed', type=int, default=1)
-    parser.add_argument('--subset', type=str, default='super_class')
-    parser.add_argument('--patch-size', type=int, default=50)
-    parser.add_argument('--training-percentage', type=int, default=100)
-    parser.add_argument('--data-dir', type=str, default='$ROOT_DIR/data/')
-    args = SimpleNamespace(**vars(parser.parse_args()))
-
-    ROOT_DIR = '/'.join(os.path.realpath(__file__).split('/')[:-2])
-    args.data_dir = args.data_dir.replace('$ROOT_DIR', ROOT_DIR)
-
-    model_save_path = f'../checkpoints/ECG_PTBXL/subset={args.subset}-percentage_{args.training_percentage}_BN1d_{args.layers}_lr_{args.lr}_epoch_{args.num_epoch}-seed_{args.random_seed}/model_best_val_auroc.ckpt'
-    results_dir = f'../results/ECG_PTBXL/subset={args.subset}-percentage_{args.training_percentage}_BN1d_{args.layers}_lr_{args.lr}_epoch_{args.num_epoch}-seed_{args.random_seed}/'
-    log_dir = os.path.join(results_dir, 'log.txt')
-
-    os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
-    os.makedirs(results_dir, exist_ok=True)
+    # Log the config.
+    config_str = 'Config: \n'
+    args_dict = args.__dict__
+    for key in args_dict.keys():
+        config_str += '%s: %s\n' % (key, args_dict[key])
+    config_str += '\nTraining History:'
+    log(config_str, filepath=args.log_path, to_console=False)
 
     seed_everything(args.random_seed)
     train_loader, val_loader, test_loader, num_classes = load_ptbxl(args)
@@ -156,15 +139,15 @@ if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
 
-    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-5)
+    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     scheduler = LinearWarmupCosineAnnealingLR(optimizer=optimizer,
                                               warmup_start_lr=args.lr * 1e-3,
                                               warmup_epochs=min(10, args.num_epoch//5),
                                               max_epochs=args.num_epoch)
 
-    log('Training begins.', filepath=log_dir)
-    log(f'Number of total parameters: {count_parameters(model)}', filepath=log_dir)
-    log(f'Number of trainable parameters: {count_parameters(model, trainable_only=True)}', filepath=log_dir)
+    log('Training begins.', filepath=args.log_path)
+    log(f'Number of total parameters: {count_parameters(model)}', filepath=args.log_path)
+    log(f'Number of trainable parameters: {count_parameters(model, trainable_only=True)}', filepath=args.log_path)
 
     loss_fn_pred = nn.BCEWithLogitsLoss()
     train_acc_list, train_auroc_list, val_acc_list, val_auroc_list = [], [], [], []
@@ -176,7 +159,7 @@ if __name__ == '__main__':
             # Train
             model.train()
             train_loss_recon, train_loss_pred, train_acc, train_auroc = \
-                train_epoch(train_loader=train_loader, model=model, optimizer=optimizer, loss_fn_pred=loss_fn_pred, num_classes=num_classes)
+                train_epoch(train_loader=train_loader, model=model, optimizer=optimizer, loss_fn_pred=loss_fn_pred, num_classes=num_classes, device=device)
             train_loss_recon_list.append(train_loss_recon)
             train_loss_pred_list.append(train_loss_pred)
             train_acc_list.append(train_acc)
@@ -185,7 +168,7 @@ if __name__ == '__main__':
             # Validation
             model.eval()
             val_loss_recon, val_loss_pred, val_acc, val_auroc = \
-                infer(loader=val_loader, model=model, loss_fn_pred=loss_fn_pred, num_classes=num_classes)
+                infer(loader=val_loader, model=model, loss_fn_pred=loss_fn_pred, num_classes=num_classes, device=device)
             val_loss_recon_list.append(val_loss_recon)
             val_loss_pred_list.append(val_loss_pred)
             val_acc_list.append(val_acc)
@@ -200,19 +183,19 @@ if __name__ == '__main__':
                              tr_acc=f'{100 * train_acc:.2f}', val_acc=f'{100 * val_acc:.2f}',
                              tr_auroc=f'{100 * train_auroc:.2f}', val_auroc=f'{100 * val_auroc:.2f}',
                              lr=optimizer.param_groups[0]['lr'])
-            log_string = f'Epoch [{epoch}/{args.num_epoch}]. Train recon loss = {train_loss_recon:.5f}, pred loss = {train_loss_pred:.3f}, acc = {100 * train_acc:.3f}, auroc = {100 * train_auroc:.3f}.'
+            log_string = f'Epoch [{epoch + 1}/{args.num_epoch}]. Train recon loss = {train_loss_recon:.5f}, pred loss = {train_loss_pred:.3f}, acc = {100 * train_acc:.3f}, auroc = {100 * train_auroc:.3f}.'
             log_string += f'\nValidation recon loss = {val_loss_recon:.5f}, pred loss = {val_loss_pred:.3f}, acc = {100 * val_acc:.3f}, auroc = {100 * val_auroc:.3f}.'
-            log(log_string, filepath=log_dir, to_console=False)
+            log(log_string, filepath=args.log_path, to_console=False)
 
             # Save best model.
             if val_auroc > best_auroc:
                 best_auroc = val_auroc
                 best_model = model.state_dict()
-                torch.save(best_model, model_save_path)
-                log('Model weights successfully saved for best validation AUROC.', filepath=log_dir, to_console=False)
+                torch.save(best_model, args.model_save_path)
+                log('Model weights successfully saved for best validation AUROC.', filepath=args.log_path, to_console=False)
 
             # Save stats.
-            results_stats_save_path = os.path.join(results_dir, 'results_stats.npz')
+            results_stats_save_path = os.path.join(args.results_dir, 'results_stats.npz')
 
             np.savez(results_stats_save_path,
                      train_acc_list=100*np.array(train_acc_list).astype(np.float16),
@@ -228,7 +211,36 @@ if __name__ == '__main__':
     # Testing
     model.eval()
     test_loss_recon, test_loss_pred, test_acc, test_auroc = \
-        infer(loader=test_loader, model=model, loss_fn_pred=loss_fn_pred, num_classes=num_classes)
+        infer(loader=test_loader, model=model, loss_fn_pred=loss_fn_pred, num_classes=num_classes, device=device)
 
     log_string = f'\nTest recon loss = {test_loss_recon:.5f}, pred loss = {test_loss_pred:.3f}, acc = {100 * test_acc:.3f}, auroc = {100 * test_auroc:.3f}.'
-    log(log_string, filepath=log_dir, to_console=False)
+    log(log_string, filepath=args.log_path, to_console=False)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--layers', type=int, default=1)
+    parser.add_argument('--lr', help='Learning rate.', type=float, default=1e-1)
+    parser.add_argument('--batch-size', type=int, default=256)
+    parser.add_argument('--num-epoch', type=int, default=100)
+    parser.add_argument('--loss-recon-coeff', type=float, default=0.1)
+    parser.add_argument('--num-workers', type=int, default=8)
+    parser.add_argument('--random-seed', type=int, default=1)
+    parser.add_argument('--subset', type=str, default='super_class')
+    parser.add_argument('--patch-size', type=int, default=50)
+    parser.add_argument('--training-percentage', type=int, default=100)
+    parser.add_argument('--data-dir', type=str, default='$ROOT_DIR/data/')
+    args = SimpleNamespace(**vars(parser.parse_args()))
+
+    ROOT_DIR = '/'.join(os.path.realpath(__file__).split('/')[:-2])
+    args.data_dir = args.data_dir.replace('$ROOT_DIR', ROOT_DIR)
+
+    curr_run_identifier = f'ECG_PTBXL/subset={args.subset}-{args.training_percentage}%_BN1d-L{args.layers}_patch-{args.patch_size}_lr-{args.lr}_epoch-{args.num_epoch}_seed-{args.random_seed}'
+    args.results_dir = os.path.join(ROOT_DIR, 'results', curr_run_identifier)
+    args.log_path = os.path.join(args.results_dir, 'log.txt')
+    args.model_save_path = os.path.join(args.results_dir, 'model_best_val_auroc.pty')
+
+    os.makedirs(os.path.dirname(args.model_save_path), exist_ok=True)
+    os.makedirs(args.results_dir, exist_ok=True)
+
+    main(args)
