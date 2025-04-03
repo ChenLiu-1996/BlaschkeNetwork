@@ -12,7 +12,6 @@ import_dir = '/'.join(os.path.realpath(__file__).split('/')[:-2])
 sys.path.insert(0, import_dir)
 from models.transformer1d import Transformer1d
 
-
 class BlaschkeLayer1d(nn.Module):
     '''
     Blaschke Layer for 1D signals.
@@ -139,7 +138,6 @@ class BlaschkeLayer1d(nn.Module):
         blaschke_factor = self.compute_blaschke_factor(x)
         return blaschke_factor
 
-
 class Ignore2ndArg(nn.Module):
     '''
     This is a module wrapper that essentially ignores the 2nd input argument.
@@ -158,7 +156,6 @@ class Ignore2ndArg(nn.Module):
         assert dummy_arg is not None
         x = self.module(x)
         return x
-
 
 class BlaschkeNetwork1d(nn.Module):
     '''
