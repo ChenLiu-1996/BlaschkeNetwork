@@ -72,15 +72,17 @@ class BlaschkeLayer1d(nn.Module):
                 inputs, shape [B, C, L] (number of samples, channel, signal length)
         '''
 
+        B, C, L = x.shape                                          # [batch_size, num_channels, seq_len]
         assert len(x.shape) == 3
-        x_real, x_imag = torch.real(x), torch.imag(x)
-        x = torch.cat((x_real, x_imag), dim=1).float()
+        x_real, x_imag = torch.real(x), torch.imag(x)              # [batch_size, num_channels, seq_len]
+        x = torch.stack((x_real, x_imag), dim=2).float()           # [batch_size, num_channels, 2, seq_len]
+        x = rearrange(x, 'b c r l -> (b c) r l')                   # [batch_size * num_channels, 2, seq_len]
         assert len(x.shape) == 3
 
-        params = checkpoint(self.param_net, x, self.dummy_tensor)
+        params = checkpoint(self.param_net, x, self.dummy_tensor)  # [batch_size * num_channels, 4]
+        params = rearrange(params, '(b c) p -> b c p', b=B, c=C)   # [batch_size, num_channels, 4]
 
-        assert len(params.shape) == 2 and params.shape[0] == x.shape[0] and params.shape[1] == 4
-        alpha, log_beta, scale_real, scale_imag = params[:, 0], params[:, 1], params[:, 2], params[:, 3]
+        alpha, log_beta, scale_real, scale_imag = params[..., 0], params[..., 1], params[..., 2], params[..., 3]
         self.alpha = alpha
         self.beta = torch.exp(log_beta + self.eps)
         self.scale = scale_real + 1j * scale_imag
@@ -100,10 +102,9 @@ class BlaschkeLayer1d(nn.Module):
             y : 3D torch.float
                 outputs, shape [B, C, L] (number of samples, channel, signal length)
         '''
-        frac = (rearrange(x, 'b c l -> b (c l)') - self.alpha.unsqueeze(-1)) / self.beta.unsqueeze(-1)
+        frac = (x - self.alpha.unsqueeze(-1)) / self.beta.unsqueeze(-1)
         theta_x = self.activation(frac)
         blaschke_factor = torch.exp(1j * theta_x)
-        blaschke_factor = rearrange(blaschke_factor, 'b (c l) -> b c l', c=x.shape[1], l=x.shape[2])
         return blaschke_factor
 
     def to(self, device: str):
@@ -193,7 +194,7 @@ class BlaschkeNetwork1d(nn.Module):
                  out_classes: int = 10,
                  num_blaschke_list: List[int] = None,
                  param_net_dim: int = 64,
-                 param_net_depth: int = 1,
+                 param_net_depth: int = 2,
                  param_net_heads: int = 4,
                  param_net_mlp_dim: int = 64,
                  eps: float = 1e-6,
@@ -218,11 +219,11 @@ class BlaschkeNetwork1d(nn.Module):
         #   alpha, log_beta, scale_real, scale_imaginary
         num_blaschke_params = 4
 
-        self.param_net = Ignore2ndArg(
+        self.param_net = Ignore2ndArg(  # `Ignore2ndArg` is a wrapper to facilitate checkpointing.
             Transformer1d(
                 seq_len=signal_len,     # complexification doubles length.
                 patch_size=patch_size,
-                channels=2 * num_channels,  # (real, imaginary)
+                channels=2,  # (real, imaginary)
                 num_classes=num_blaschke_params,
                 dim=param_net_dim,
                 depth=param_net_depth,
@@ -230,7 +231,7 @@ class BlaschkeNetwork1d(nn.Module):
                 mlp_dim=param_net_mlp_dim,
                 dropout=0,
                 emb_dropout=0,
-        ))  # `Ignore2ndArg` is a wrapper to facilitate checkpointing.
+        ))
 
         # Initialize the BNLayers
         self.encoder = nn.ModuleList([])
@@ -243,7 +244,7 @@ class BlaschkeNetwork1d(nn.Module):
                                 device=device)
             )
 
-        num_features = sum(self.num_blaschke_list) * num_blaschke_params
+        num_features = sum(self.num_blaschke_list) * num_channels * num_blaschke_params
         self.classifier = nn.Sequential(
             nn.BatchNorm1d(num_features),
             nn.Linear(num_features, num_features),
@@ -330,7 +331,7 @@ class BlaschkeNetwork1d(nn.Module):
                 blaschke_product = blaschke_product * blaschke_factor
 
             # This is s_n * B_1 * B_2 * ... * B_n.
-            curr_signal_approx = layer.scale.unsqueeze(-1).unsqueeze(-1) * blaschke_product
+            curr_signal_approx = layer.scale.unsqueeze(-1) * blaschke_product
 
             # F_{n+1} = F_n - s_n * B_1 * ... * B_n.
             residual_signal = residual_signal - curr_signal_approx
@@ -342,7 +343,7 @@ class BlaschkeNetwork1d(nn.Module):
             # NOTE: Currently, the model is trained end-to-end, where the Blaschke parameters
             # are used for downstream classification, and the gradient for classification can be backproped
             # through the Blaschke networks (param_net).
-            curr_parameters = torch.stack((layer.alpha, layer.beta, torch.real(layer.scale), torch.imag(layer.scale)), dim=1)
+            curr_parameters = torch.hstack((layer.alpha, layer.beta, torch.real(layer.scale), torch.imag(layer.scale)))
             if parameters_for_downstream is None:
                 parameters_for_downstream = curr_parameters
             else:

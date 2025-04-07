@@ -142,7 +142,7 @@ def main(args):
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     scheduler = LinearWarmupCosineAnnealingLR(optimizer=optimizer,
                                               warmup_start_lr=args.lr * 1e-3,
-                                              warmup_epochs=min(10, args.num_epoch//5),
+                                              warmup_epochs=min(20, args.num_epoch//5),
                                               max_epochs=args.num_epoch)
 
     log('Training begins.', filepath=args.log_path)
@@ -220,9 +220,9 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--layers', type=int, default=1)
-    parser.add_argument('--lr', help='Learning rate.', type=float, default=1e-1)
+    parser.add_argument('--lr', help='Learning rate.', type=float, default=1e-2)
     parser.add_argument('--batch-size', type=int, default=256)
-    parser.add_argument('--num-epoch', type=int, default=100)
+    parser.add_argument('--num-epoch', type=int, default=40)
     parser.add_argument('--loss-recon-coeff', type=float, default=0.1)
     parser.add_argument('--num-workers', type=int, default=8)
     parser.add_argument('--random-seed', type=int, default=1)
