@@ -221,7 +221,7 @@ class BlaschkeNetwork1d(nn.Module):
 
         self.param_net = Ignore2ndArg(  # `Ignore2ndArg` is a wrapper to facilitate checkpointing.
             Transformer1d(
-                seq_len=signal_len,     # complexification doubles length.
+                seq_len=signal_len,
                 patch_size=patch_size,
                 channels=2,  # (real, imaginary)
                 num_classes=num_blaschke_params,
