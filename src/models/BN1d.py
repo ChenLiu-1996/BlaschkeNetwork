@@ -223,7 +223,7 @@ class BlaschkeNetwork1d(nn.Module):
             Transformer1d(
                 seq_len=signal_len,
                 patch_size=patch_size,
-                channels=2,  # (real, imaginary)
+                channels=2,             # (real, imaginary)
                 num_classes=num_blaschke_params,
                 dim=param_net_dim,
                 depth=param_net_depth,
