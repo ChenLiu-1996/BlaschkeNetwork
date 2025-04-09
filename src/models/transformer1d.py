@@ -99,6 +99,7 @@ class Transformer1d(nn.Module):
         )
 
     def forward(self, series):
+        import pdb; pdb.set_trace()
         x = self.to_patch_embedding(series)
         b, n, _ = x.shape
 

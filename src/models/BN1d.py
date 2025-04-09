@@ -11,6 +11,7 @@ import sys
 import_dir = '/'.join(os.path.realpath(__file__).split('/')[:-2])
 sys.path.insert(0, import_dir)
 from models.transformer1d import Transformer1d
+from models.patchTST import PatchTST
 
 class BlaschkeLayer1d(nn.Module):
     '''
@@ -219,19 +220,38 @@ class BlaschkeNetwork1d(nn.Module):
         #   alpha, log_beta, scale_real, scale_imaginary
         num_blaschke_params = 4
 
+        # self.param_net = Ignore2ndArg(  # `Ignore2ndArg` is a wrapper to facilitate checkpointing.
+        #     Transformer1d(
+        #         seq_len=signal_len,
+        #         patch_size=patch_size,
+        #         channels=2,             # (real, imaginary)
+        #         num_classes=num_blaschke_params,
+        #         dim=param_net_dim,
+        #         depth=param_net_depth,
+        #         heads=param_net_heads,
+        #         mlp_dim=param_net_mlp_dim,
+        #         dropout=0,
+        #         emb_dropout=0,
+        # ))
+
         self.param_net = Ignore2ndArg(  # `Ignore2ndArg` is a wrapper to facilitate checkpointing.
-            Transformer1d(
-                seq_len=signal_len,
-                patch_size=patch_size,
-                channels=2,             # (real, imaginary)
+            PatchTST(
+                num_channels=2,         # (real, imaginary)
                 num_classes=num_blaschke_params,
-                dim=param_net_dim,
-                depth=param_net_depth,
-                heads=param_net_heads,
-                mlp_dim=param_net_mlp_dim,
-                dropout=0,
-                emb_dropout=0,
+                patch_size=patch_size,
+                num_patch=signal_len // patch_size,
+                n_layers=param_net_depth,
+                n_heads=param_net_heads,
+                d_model=param_net_dim,
+                shared_embedding=True,
+                d_ff=param_net_mlp_dim,
+                dropout=0.2,
+                head_dropout=0.2,
+                act='relu',
+                res_attention=False,
         ))
+
+
 
         # Initialize the BNLayers
         self.encoder = nn.ModuleList([])
