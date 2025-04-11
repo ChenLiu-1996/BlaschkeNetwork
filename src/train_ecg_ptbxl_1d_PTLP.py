@@ -277,6 +277,11 @@ def main(args):
 
 
 if __name__ == '__main__':
+    '''
+    NOTE: The point of this script is to perform pretraining + linear probing.
+    There is something wrong with the current script, such that the performance is very poor.
+    '''
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--layers', type=int, default=1)
     parser.add_argument('--detach-by-iter', action='store_true')                  # Independently optimize Blaschke decomposition per iteration.
