@@ -71,7 +71,7 @@ def linear_probe_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes
         loss_recon = residual_sqnorm.mean()
         loss_pred = loss_fn_pred(y_pred, y_true.to(device))
 
-        loss = loss_recon * args.loss_recon_coeff + loss_pred
+        loss = loss_pred  # recon loss will not update any module anyways due to param freezing.
         loss.backward()
         optimizer.step()
 
@@ -111,7 +111,7 @@ def infer(loader, model, loss_fn_pred, num_classes, device):
 
     for x, y_true in loader:
         x = x.to(device)
-        y_pred, residual_signals_sqsum = model(x)
+        y_pred, residual_signals_sqsum, _ = model(x)
         loss_recon = residual_signals_sqsum.mean()
         loss_pred = loss_fn_pred(y_pred, y_true.to(device))
 
@@ -171,101 +171,103 @@ def main(args):
     loss_fn_pred = nn.BCEWithLogitsLoss()
 
     # 1. Pretraining.
-    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
-    scheduler = LinearWarmupCosineAnnealingLR(optimizer=optimizer,
-                                              warmup_start_lr=args.lr * 1e-3,
-                                              warmup_epochs=min(20, args.epoch_pretrain//5),
-                                              max_epochs=args.epoch_pretrain)
+    if not os.path.isfile(args.model_pretrain_save_path):
+        optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+        scheduler = LinearWarmupCosineAnnealingLR(optimizer=optimizer,
+                                                warmup_start_lr=args.lr * 1e-3,
+                                                warmup_epochs=min(20, args.epoch_pretrain//5),
+                                                max_epochs=args.epoch_pretrain)
 
-    log('Pretraining begins.', filepath=args.log_path)
-    with tqdm(range(args.epoch_pretrain)) as pbar:
-        for epoch in pbar:
-            model.train()
-            train_loss_recon = pretrain_epoch(args, train_loader=train_loader, model=model, optimizer=optimizer, device=device)
+        log('Pretraining begins.', filepath=args.log_path)
+        with tqdm(range(args.epoch_pretrain)) as pbar:
+            for epoch in pbar:
+                model.train()
+                train_loss_recon = pretrain_epoch(args, train_loader=train_loader, model=model, optimizer=optimizer, device=device)
 
-            # Update learning rate.
-            scheduler.step()
+                # Update learning rate.
+                scheduler.step()
 
-            # Update progress bar.
-            pbar.set_postfix(pretrain_recon=f'{train_loss_recon:.5f}', lr=optimizer.param_groups[0]['lr'])
-            log_string = f'(Pretraining) Epoch [{epoch + 1}/{args.epoch_pretrain}]. Train recon loss = {train_loss_recon:.5f}.'
-            log(log_string, filepath=args.log_path, to_console=False)
+                # Update progress bar.
+                pbar.set_postfix(pretrain_recon=f'{train_loss_recon:.5f}', lr=optimizer.param_groups[0]['lr'])
+                log_string = f'(Pretraining) Epoch [{epoch + 1}/{args.epoch_pretrain}]. Train recon loss = {train_loss_recon:.5f}.'
+                log(log_string, filepath=args.log_path, to_console=False)
 
-            torch.save(model.state_dict(), args.model_pretrain_save_path)
-            log(f'Model weights of the latest pretraining model is saved to {args.model_pretrain_save_path}.', filepath=args.log_path, to_console=False)
+                torch.save(model.state_dict(), args.model_pretrain_save_path)
+                log(f'Model weights of the latest pretraining model is saved to {args.model_pretrain_save_path}.', filepath=args.log_path, to_console=False)
 
-    # 2. Linear probing.
-    log('Linear probing begins.', filepath=args.log_path)
     model.load_state_dict(torch.load(args.model_pretrain_save_path))
     log(f'Model weights from pretraining is loaded from {args.model_pretrain_save_path}.', filepath=args.log_path, to_console=False)
 
-    model.freeze()
-    model.unfreeze_classifier()
-    optimizer = optim.AdamW(model.classifier.parameters(), lr=args.lr, weight_decay=1e-4)
-    scheduler = LinearWarmupCosineAnnealingLR(optimizer=optimizer,
-                                              warmup_start_lr=args.lr * 1e-3,
-                                              warmup_epochs=min(20, args.epoch_probing//5),
-                                              max_epochs=args.epoch_probing)
+    # 2. Linear probing.
+    if not os.path.isfile(args.model_probing_save_path):
+        model.freeze()
+        model.unfreeze_classifier()
+        optimizer = optim.AdamW(model.classifier.parameters(), lr=args.lr, weight_decay=1e-4)
+        scheduler = LinearWarmupCosineAnnealingLR(optimizer=optimizer,
+                                                warmup_start_lr=args.lr * 1e-3,
+                                                warmup_epochs=min(20, args.epoch_probing//5),
+                                                max_epochs=args.epoch_probing)
 
-    best_auroc = 0
-    train_acc_list, train_auroc_list, val_acc_list, val_auroc_list = [], [], [], []
-    train_loss_recon_list, train_loss_pred_list, val_loss_recon_list, val_loss_pred_list = [], [], [], []
-    with tqdm(range(args.epoch_probing)) as pbar:
-        for epoch in pbar:
-            # Training (linear probing).
-            model.train()
-            train_loss_recon, train_loss_pred, train_acc, train_auroc = \
-                linear_probe_epoch(train_loader=train_loader, model=model, optimizer=optimizer, loss_fn_pred=loss_fn_pred, num_classes=num_classes, device=device)
-            train_loss_recon_list.append(train_loss_recon)
-            train_loss_pred_list.append(train_loss_pred)
-            train_acc_list.append(train_acc)
-            train_auroc_list.append(train_auroc)
+        log('Linear probing begins.', filepath=args.log_path)
+        best_auroc = 0
+        train_acc_list, train_auroc_list, val_acc_list, val_auroc_list = [], [], [], []
+        train_loss_recon_list, train_loss_pred_list, val_loss_recon_list, val_loss_pred_list = [], [], [], []
+        with tqdm(range(args.epoch_probing)) as pbar:
+            for epoch in pbar:
+                # Training (linear probing).
+                model.train()
+                train_loss_recon, train_loss_pred, train_acc, train_auroc = \
+                    linear_probe_epoch(train_loader=train_loader, model=model, optimizer=optimizer, loss_fn_pred=loss_fn_pred, num_classes=num_classes, device=device)
+                train_loss_recon_list.append(train_loss_recon)
+                train_loss_pred_list.append(train_loss_pred)
+                train_acc_list.append(train_acc)
+                train_auroc_list.append(train_auroc)
 
-            # Validation.
-            model.eval()
-            val_loss_recon, val_loss_pred, val_acc, val_auroc = \
-                infer(loader=val_loader, model=model, loss_fn_pred=loss_fn_pred, num_classes=num_classes, device=device)
-            val_loss_recon_list.append(val_loss_recon)
-            val_loss_pred_list.append(val_loss_pred)
-            val_acc_list.append(val_acc)
-            val_auroc_list.append(val_auroc)
+                # Validation.
+                model.eval()
+                val_loss_recon, val_loss_pred, val_acc, val_auroc = \
+                    infer(loader=val_loader, model=model, loss_fn_pred=loss_fn_pred, num_classes=num_classes, device=device)
+                val_loss_recon_list.append(val_loss_recon)
+                val_loss_pred_list.append(val_loss_pred)
+                val_acc_list.append(val_acc)
+                val_auroc_list.append(val_auroc)
 
-            # Update learning rate.
-            scheduler.step()
+                # Update learning rate.
+                scheduler.step()
 
-            # Update progress bar.
-            pbar.set_postfix(tr_recon=f'{train_loss_recon:.5f}', tr_pred=f'{train_loss_pred:.3f}',
-                             val_recon=f'{val_loss_recon:.5f}', val_pred=f'{val_loss_pred:.3f}',
-                             tr_acc=f'{100 * train_acc:.2f}', val_acc=f'{100 * val_acc:.2f}',
-                             tr_auroc=f'{100 * train_auroc:.2f}', val_auroc=f'{100 * val_auroc:.2f}',
-                             lr=optimizer.param_groups[0]['lr'])
-            log_string = f'(Linear Probing) Epoch [{epoch + 1}/{args.epoch_probing}]. Train recon loss = {train_loss_recon:.5f}, pred loss = {train_loss_pred:.3f}, acc = {100 * train_acc:.3f}, auroc = {100 * train_auroc:.3f}.'
-            log_string += f'\nValidation recon loss = {val_loss_recon:.5f}, pred loss = {val_loss_pred:.3f}, acc = {100 * val_acc:.3f}, auroc = {100 * val_auroc:.3f}.'
-            log(log_string, filepath=args.log_path, to_console=False)
+                # Update progress bar.
+                pbar.set_postfix(tr_recon=f'{train_loss_recon:.5f}', tr_pred=f'{train_loss_pred:.3f}',
+                                val_recon=f'{val_loss_recon:.5f}', val_pred=f'{val_loss_pred:.3f}',
+                                tr_acc=f'{100 * train_acc:.2f}', val_acc=f'{100 * val_acc:.2f}',
+                                tr_auroc=f'{100 * train_auroc:.2f}', val_auroc=f'{100 * val_auroc:.2f}',
+                                lr=optimizer.param_groups[0]['lr'])
+                log_string = f'(Linear Probing) Epoch [{epoch + 1}/{args.epoch_probing}]. Train recon loss = {train_loss_recon:.5f}, pred loss = {train_loss_pred:.3f}, acc = {100 * train_acc:.3f}, auroc = {100 * train_auroc:.3f}.'
+                log_string += f'\nValidation recon loss = {val_loss_recon:.5f}, pred loss = {val_loss_pred:.3f}, acc = {100 * val_acc:.3f}, auroc = {100 * val_auroc:.3f}.'
+                log(log_string, filepath=args.log_path, to_console=False)
 
-            # Save best model.
-            if val_auroc > best_auroc:
-                best_auroc = val_auroc
-                torch.save(model.state_dict(), args.model_probing_save_path)
-                log(f'Model weights with the best validation AUROC is saved to {args.model_probing_save_path}.', filepath=args.log_path, to_console=False)
+                # Save best model.
+                if val_auroc > best_auroc:
+                    best_auroc = val_auroc
+                    torch.save(model.state_dict(), args.model_probing_save_path)
+                    log(f'Model weights with the best validation AUROC is saved to {args.model_probing_save_path}.', filepath=args.log_path, to_console=False)
 
-            # Save stats.
-            np.savez(args.results_stats_save_path,
-                     train_acc_list=100*np.array(train_acc_list).astype(np.float16),
-                     val_acc_list=100*np.array(val_acc_list).astype(np.float16),
-                     train_auroc_list=100*np.array(train_auroc_list).astype(np.float16),
-                     val_auroc_list=100*np.array(val_auroc_list).astype(np.float16),
-                     train_loss_pred_list=np.array(train_loss_pred_list).astype(np.float16),
-                     train_loss_recon_list=np.array(train_loss_recon_list).astype(np.float16),
-                     val_loss_pred_list=np.array(val_loss_pred_list).astype(np.float16),
-                     val_loss_recon_list=np.array(val_loss_recon_list).astype(np.float16),
-            )
+                # Save stats.
+                np.savez(args.results_stats_save_path,
+                        train_acc_list=100*np.array(train_acc_list).astype(np.float16),
+                        val_acc_list=100*np.array(val_acc_list).astype(np.float16),
+                        train_auroc_list=100*np.array(train_auroc_list).astype(np.float16),
+                        val_auroc_list=100*np.array(val_auroc_list).astype(np.float16),
+                        train_loss_pred_list=np.array(train_loss_pred_list).astype(np.float16),
+                        train_loss_recon_list=np.array(train_loss_recon_list).astype(np.float16),
+                        val_loss_pred_list=np.array(val_loss_pred_list).astype(np.float16),
+                        val_loss_recon_list=np.array(val_loss_recon_list).astype(np.float16),
+                )
 
     # Testing.
-    log('Testing begins.', filepath=args.log_path)
     model.load_state_dict(torch.load(args.model_probing_save_path))
     log(f'Model weights from linear probing is loaded from {args.model_probing_save_path}.', filepath=args.log_path, to_console=False)
 
+    log('Testing begins.', filepath=args.log_path)
     model.eval()
     test_loss_recon, test_loss_pred, test_acc, test_auroc = \
         infer(loader=test_loader, model=model, loss_fn_pred=loss_fn_pred, num_classes=num_classes, device=device)
@@ -283,7 +285,6 @@ if __name__ == '__main__':
     parser.add_argument('--batch-size', type=int, default=256)
     parser.add_argument('--epoch-pretrain', type=int, default=20)
     parser.add_argument('--epoch-probing', type=int, default=80)
-    parser.add_argument('--loss-recon-coeff', type=float, default=0.1)
     parser.add_argument('--num-workers', type=int, default=8)
     parser.add_argument('--random-seed', type=int, default=1)
     parser.add_argument('--subset', type=str, default='super_class')

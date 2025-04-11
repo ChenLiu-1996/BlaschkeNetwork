@@ -13,6 +13,16 @@ sys.path.insert(0, import_dir)
 from models.patchTST import PatchTST
 
 
+def any_requires_grad(module: nn.Module) -> bool:
+    '''
+    Check if any parameter in module requires grad.
+    '''
+    any_grad = False
+    for p in module.parameters():
+        if p.requires_grad:
+            any_grad = True
+    return any_grad
+
 class BlaschkeLayer1d(nn.Module):
     '''
     Blaschke Layer for 1D signals.
@@ -73,15 +83,18 @@ class BlaschkeLayer1d(nn.Module):
                 inputs, shape [B, C, L] (batch size, channel, signal length)
         '''
 
-        B, C, L = x.shape                                          # [batch_size, num_channels, seq_len]
+        B, C, L = x.shape                                              # [batch_size, num_channels, seq_len]
         assert len(x.shape) == 3
-        x_real, x_imag = torch.real(x), torch.imag(x)              # [batch_size, num_channels, seq_len]
-        x = torch.stack((x_real, x_imag), dim=2).float()           # [batch_size, num_channels, 2, seq_len]
-        x = rearrange(x, 'b c r l -> (b c) r l')                   # [batch_size * num_channels, 2, seq_len]
+        x_real, x_imag = torch.real(x), torch.imag(x)                  # [batch_size, num_channels, seq_len]
+        x = torch.stack((x_real, x_imag), dim=2).float()               # [batch_size, num_channels, 2, seq_len]
+        x = rearrange(x, 'b c r l -> (b c) r l')                       # [batch_size * num_channels, 2, seq_len]
         assert len(x.shape) == 3
 
-        params = checkpoint(self.param_net, x, self.dummy_tensor)  # [batch_size * num_channels, 4]
-        params = rearrange(params, '(b c) p -> b c p', b=B, c=C)   # [batch_size, num_channels, 4]
+        if any_requires_grad(self.param_net):
+            params = checkpoint(self.param_net, x, self.dummy_tensor)  # [batch_size * num_channels, 4]
+        else:
+            params = self.param_net(x, self.dummy_tensor)              # [batch_size * num_channels, 4]
+        params = rearrange(params, '(b c) p -> b c p', b=B, c=C)       # [batch_size, num_channels, 4]
 
         alpha, log_beta, scale_real, scale_imag = params[..., 0], params[..., 1], params[..., 2], params[..., 3]
         self.alpha = alpha
