@@ -191,13 +191,12 @@ def main(args):
             log_string = f'(Pretraining) Epoch [{epoch + 1}/{args.epoch_pretrain}]. Train recon loss = {train_loss_recon:.5f}.'
             log(log_string, filepath=args.log_path, to_console=False)
 
-            best_model = model.state_dict()
-            torch.save(best_model, args.model_pretrain_save_path)
+            torch.save(model.state_dict(), args.model_pretrain_save_path)
             log(f'Model weights of the latest pretraining model is saved to {args.model_pretrain_save_path}.', filepath=args.log_path, to_console=False)
 
     # 2. Linear probing.
     log('Linear probing begins.', filepath=args.log_path)
-    model.load_state_dict(torch.load(args.model_pretrain_save_path, weights_only=True))
+    model.load_state_dict(torch.load(args.model_pretrain_save_path))
     log(f'Model weights from pretraining is loaded from {args.model_pretrain_save_path}.', filepath=args.log_path, to_console=False)
 
     model.freeze()
@@ -247,8 +246,7 @@ def main(args):
             # Save best model.
             if val_auroc > best_auroc:
                 best_auroc = val_auroc
-                best_model = model.state_dict()
-                torch.save(best_model, args.model_probing_save_path)
+                torch.save(model.state_dict(), args.model_probing_save_path)
                 log(f'Model weights with the best validation AUROC is saved to {args.model_probing_save_path}.', filepath=args.log_path, to_console=False)
 
             # Save stats.
@@ -265,7 +263,7 @@ def main(args):
 
     # Testing.
     log('Testing begins.', filepath=args.log_path)
-    model.load_state_dict(torch.load(args.model_probing_save_path, weights_only=True))
+    model.load_state_dict(torch.load(args.model_probing_save_path))
     log(f'Model weights from linear probing is loaded from {args.model_probing_save_path}.', filepath=args.log_path, to_console=False)
 
     model.eval()
