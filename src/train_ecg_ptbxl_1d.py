@@ -43,12 +43,9 @@ def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes, devic
     for (x, y_true) in train_loader:
         optimizer.zero_grad()
         x = x.to(device)
-        y_pred, residual_sqnorm, _ = model(x)
+        y_pred, residual_sqnorm, blaschke_coeffs = model(x)
         loss_recon = residual_sqnorm.mean()
         loss_pred = loss_fn_pred(y_pred, y_true.to(device))
-
-        _, residual_sqnorm, blaschke_coeffs = model(x)
-        loss_recon = residual_sqnorm.mean()
 
         # if args.direct_supervision:
         #     signal = x.detach().cpu().numpy()
