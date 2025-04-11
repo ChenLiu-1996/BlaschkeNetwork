@@ -10,8 +10,8 @@ import os
 import sys
 import_dir = '/'.join(os.path.realpath(__file__).split('/')[:-2])
 sys.path.insert(0, import_dir)
-from models.transformer1d import Transformer1d
 from models.patchTST import PatchTST
+
 
 class BlaschkeLayer1d(nn.Module):
     '''
@@ -70,7 +70,7 @@ class BlaschkeLayer1d(nn.Module):
         Args:
         -----
             x : 3D torch.float
-                inputs, shape [B, C, L] (number of samples, channel, signal length)
+                inputs, shape [B, C, L] (batch size, channel, signal length)
         '''
 
         B, C, L = x.shape                                          # [batch_size, num_channels, seq_len]
@@ -96,12 +96,12 @@ class BlaschkeLayer1d(nn.Module):
         Args:
         -----
             x : 3D torch.float
-                inputs, shape [B, C, L] (number of samples, channel, signal length)
+                inputs, shape [B, C, L] (batch size, channel, signal length)
 
         Returns:
         --------
             y : 3D torch.float
-                outputs, shape [B, C, L] (number of samples, channel, signal length)
+                outputs, shape [B, C, L] (batch size, channel, signal length)
         '''
         frac = (x - self.alpha.unsqueeze(-1)) / self.beta.unsqueeze(-1)
         theta_x = self.activation(frac)
@@ -118,12 +118,12 @@ class BlaschkeLayer1d(nn.Module):
         Args:
         -----
             x : 3D torch.float
-                inputs, shape [B, C, L] (number of samples, channel, signal length)
+                inputs, shape [B, C, L] (batch size, channel, signal length)
 
         Returns:
         --------
             y : 3D torch.float
-                outputs, shape [B, C, L] (number of samples, channel, signal length)
+                outputs, shape [B, C, L] (batch size, channel, signal length)
 
         Example
         -------
@@ -174,6 +174,7 @@ class BlaschkeNetwork1d(nn.Module):
         num_channels (int): Number of signal channels.
         patch_size (int): Patch size for the signal. Used for patch embedding of signal.
         layers (int): Number of Blaschke Network layers.
+        detach_by_iter (bool): If true, penalize approximation of each iteration independently.
         out_classes (int): Number of output classes in the classification problem.
         num_blaschke_list (List[int]): Number of Blaschke factors in each layer.
 
@@ -192,12 +193,13 @@ class BlaschkeNetwork1d(nn.Module):
                  num_channels: int = 1,
                  patch_size: int = 1,
                  layers: int = 1,
+                 detach_by_iter: bool = False,
                  out_classes: int = 10,
                  num_blaschke_list: List[int] = None,
                  param_net_dim: int = 64,
                  param_net_depth: int = 2,
                  param_net_heads: int = 4,
-                 param_net_mlp_dim: int = 64,
+                 param_net_mlp_dim: int = 256,
                  eps: float = 1e-6,
                  device: str = 'cpu',
                  seed: int = 1) -> None:
@@ -209,6 +211,7 @@ class BlaschkeNetwork1d(nn.Module):
         self.num_channels = num_channels
         self.out_classes = out_classes
         self.layers = layers
+        self.detach_by_iter = detach_by_iter
         self.num_blaschke_list = num_blaschke_list
 
         if self.num_blaschke_list is None:
@@ -219,20 +222,6 @@ class BlaschkeNetwork1d(nn.Module):
         # 4 output neurons, respectively for:
         #   alpha, log_beta, scale_real, scale_imaginary
         num_blaschke_params = 4
-
-        # self.param_net = Ignore2ndArg(  # `Ignore2ndArg` is a wrapper to facilitate checkpointing.
-        #     Transformer1d(
-        #         seq_len=signal_len,
-        #         patch_size=patch_size,
-        #         channels=2,             # (real, imaginary)
-        #         num_classes=num_blaschke_params,
-        #         dim=param_net_dim,
-        #         depth=param_net_depth,
-        #         heads=param_net_heads,
-        #         mlp_dim=param_net_mlp_dim,
-        #         dropout=0,
-        #         emb_dropout=0,
-        # ))
 
         self.param_net = Ignore2ndArg(  # `Ignore2ndArg` is a wrapper to facilitate checkpointing.
             PatchTST(
@@ -247,11 +236,10 @@ class BlaschkeNetwork1d(nn.Module):
                 d_ff=param_net_mlp_dim,
                 dropout=0.2,
                 head_dropout=0.2,
-                act='relu',
+                act='gelu',
+                norm='layernorm',
                 res_attention=False,
         ))
-
-
 
         # Initialize the BNLayers
         self.encoder = nn.ModuleList([])
@@ -265,13 +253,9 @@ class BlaschkeNetwork1d(nn.Module):
             )
 
         num_features = sum(self.num_blaschke_list) * num_channels * num_blaschke_params
-        self.classifier = nn.Sequential(
-            nn.BatchNorm1d(num_features),
-            nn.Linear(num_features, num_features),
-            nn.SiLU(),
-            nn.BatchNorm1d(num_features),
-            nn.Linear(num_features, self.out_classes),
-        )
+
+        # In linear probing, only this is updated.
+        self.classifier = nn.Linear(num_features, self.out_classes)
 
         # Initialize weights
         self.initialize_weights()
@@ -293,6 +277,22 @@ class BlaschkeNetwork1d(nn.Module):
                 nn.init.kaiming_uniform_(m.weight)
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
+
+    def freeze(self) -> None:
+        '''
+        Freeze all parameters.
+        '''
+        for p in self.parameters():
+            p.requires_grad = False
+        return
+
+    def unfreeze_classifier(self) -> None:
+        '''
+        Unfreeze the parameter of the final linear classifier.
+        '''
+        for p in self.classifier.parameters():
+            p.requires_grad = True
+        return
 
     def complexify(self, x: torch.Tensor, carrier_freq: float = 0) -> torch.Tensor:
         '''
@@ -322,12 +322,12 @@ class BlaschkeNetwork1d(nn.Module):
         Args:
         -----
             x : 3D torch.float
-                inputs, shape [B, C, L] (number of samples, channel, signal length)
+                inputs, shape [B, C, L] (batch size, channel, signal length)
 
         Returns:
         --------
             y_pred : 2D torch.float
-                outputs, shape [B, CLS] (number of samples, number of classes)
+                outputs, shape [B, CLS] (batch size, number of classes)
             residual_signals_sqsum : torch.float
                 squared norm of signal approximation error
         '''
@@ -340,38 +340,41 @@ class BlaschkeNetwork1d(nn.Module):
 
         blaschke_factors = []
         residual_signal, residual_sqnorm = signal_complex, 0
-        parameters_for_downstream = None
+        blaschke_coeffs = None
 
         for layer in self.encoder:
             blaschke_factors.append(layer(residual_signal))
 
-            # This is B_1 * B_2 * ... * B_n.
-            blaschke_product = blaschke_factors[0]
-            for blaschke_factor in blaschke_factors[1:]:
+            # Blaschke product is the cumulative product of Blaschke factors
+            # B_1 * B_2 * ... * B_n.
+            blaschke_product = 1
+            for blaschke_factor in blaschke_factors:
                 blaschke_product = blaschke_product * blaschke_factor
 
-            # This is s_n * B_1 * B_2 * ... * B_n.
+            # The Blaschke approximation is given by
+            # s_n * B_1 * B_2 * ... * B_n.
             curr_signal_approx = layer.scale.unsqueeze(-1) * blaschke_product
 
             # F_{n+1} = F_n - s_n * B_1 * ... * B_n.
             residual_signal = residual_signal - curr_signal_approx
             residual_sqnorm = residual_sqnorm + torch.real(residual_signal).pow(2).mean()
 
-            # Detach the gradient so that each iteration is penalized separately.
-            residual_signal = residual_signal.detach()
+            if self.detach_by_iter:
+                # Detach the gradient so that each iteration is penalized separately.
+                residual_signal = residual_signal.detach()
 
             # NOTE: Currently, the model is trained end-to-end, where the Blaschke parameters
             # are used for downstream classification, and the gradient for classification can be backproped
             # through the Blaschke networks (param_net).
-            curr_parameters = torch.hstack((layer.alpha, layer.beta, torch.real(layer.scale), torch.imag(layer.scale)))
-            if parameters_for_downstream is None:
-                parameters_for_downstream = curr_parameters
+            curr_iter_coeffs = torch.hstack((layer.alpha, layer.beta, torch.real(layer.scale), torch.imag(layer.scale)))
+            if blaschke_coeffs is None:
+                blaschke_coeffs = curr_iter_coeffs
             else:
-                parameters_for_downstream = torch.cat((parameters_for_downstream, curr_parameters), dim=1)
+                blaschke_coeffs = torch.cat((blaschke_coeffs, curr_iter_coeffs), dim=1)
 
-        y_pred = self.classifier(parameters_for_downstream)
+        y_pred = self.classifier(blaschke_coeffs)
 
-        return y_pred, residual_sqnorm
+        return y_pred, residual_sqnorm, blaschke_coeffs
 
 
     def to(self, device: str):
