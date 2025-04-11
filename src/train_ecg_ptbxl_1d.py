@@ -238,6 +238,7 @@ if __name__ == '__main__':
     parser.add_argument('--lr', help='Learning rate.', type=float, default=1e-2)
     parser.add_argument('--batch-size', type=int, default=256)
     parser.add_argument('--epoch', type=int, default=40)
+    parser.add_argument('--loss-recon-coeff', type=float, default=1e-1)
     parser.add_argument('--num-workers', type=int, default=8)
     parser.add_argument('--random-seed', type=int, default=1)
     parser.add_argument('--subset', type=str, default='super_class')
@@ -249,7 +250,7 @@ if __name__ == '__main__':
     ROOT_DIR = '/'.join(os.path.realpath(__file__).split('/')[:-2])
     args.data_dir = args.data_dir.replace('$ROOT_DIR', ROOT_DIR)
 
-    curr_run_identifier = f'ECG_PTBXL/subset={args.subset}-{args.training_percentage}%_BN1d-L{args.layers}_DS-{args.direct_supervision}_detach-{args.detach_by_iter}_patch-{args.patch_size}_lr-{args.lr}_epoch-{args.epoch}_seed-{args.random_seed}'
+    curr_run_identifier = f'ECG_PTBXL/subset={args.subset}-{args.training_percentage}%_BN1d-L{args.layers}_DS-{args.direct_supervision}_detach-{args.detach_by_iter}_patch-{args.patch_size}_reconCoeff-{args.loss_recon_coeff}_lr-{args.lr}_epoch-{args.epoch}_seed-{args.random_seed}'
     args.results_dir = os.path.join(ROOT_DIR, 'results', curr_run_identifier)
     args.log_path = os.path.join(args.results_dir, 'log.txt')
     args.model_save_path = os.path.join(args.results_dir, 'model.pty')
