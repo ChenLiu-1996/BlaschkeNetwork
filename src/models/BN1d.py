@@ -268,7 +268,14 @@ class BlaschkeNetwork1d(nn.Module):
         num_features = sum(self.num_blaschke_list) * num_channels * num_blaschke_params
 
         # In linear probing, only this is updated.
-        self.classifier = nn.Linear(num_features, self.out_classes)
+        # This is technically not a linear probing, but rather a two-stage training.
+        self.classifier = nn.Sequential(
+            nn.BatchNorm1d(num_features),
+            nn.Linear(num_features, num_features),
+            nn.SiLU(),
+            nn.BatchNorm1d(num_features),
+            nn.Linear(num_features, self.out_classes),
+        )
 
         # Initialize weights
         self.initialize_weights()

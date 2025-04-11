@@ -35,8 +35,32 @@ def load_ptbxl(args):
 
     return train_loader, val_loader, test_loader, train_set.num_classes
 
+def pretrain_epoch(args, train_loader, model, optimizer, device):
+    train_loss_recon = 0
 
-def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes, device):
+    for (x, _) in train_loader:
+        optimizer.zero_grad()
+        x = x.to(device)
+        _, residual_sqnorm, blaschke_coeffs = model(x)
+        loss_recon = residual_sqnorm.mean()
+
+        # if args.direct_supervision:
+        #     signal = x.detach().cpu().numpy()
+        #     true_scale, true_blaschke_factor, _ = blaschke_decomposition(signal=signal,  num_blaschke_iters=args.layers, fourier_poly_order=signal.shape[-1], oversampling_rate=2, lowpass_order=1, carrier_freq=0)
+        #     assert np.all(np.diff(true_scale, axis=-1) == 0)
+        #     true_scale = true_scale[:, :, :, 0]
+
+        loss = loss_recon
+        loss.backward()
+        optimizer.step()
+
+        train_loss_recon += loss_recon.item()
+
+    train_loss_recon /= len(train_loader)
+
+    return train_loss_recon
+
+def linear_probe_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes, device):
     train_loss_recon, train_loss_pred, train_acc, train_auroc = 0, 0, 0, 0
     y_true_arr, y_pred_arr = None, None
 
@@ -47,16 +71,7 @@ def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes, devic
         loss_recon = residual_sqnorm.mean()
         loss_pred = loss_fn_pred(y_pred, y_true.to(device))
 
-        _, residual_sqnorm, blaschke_coeffs = model(x)
-        loss_recon = residual_sqnorm.mean()
-
-        # if args.direct_supervision:
-        #     signal = x.detach().cpu().numpy()
-        #     true_scale, true_blaschke_factor, _ = blaschke_decomposition(signal=signal,  num_blaschke_iters=args.layers, fourier_poly_order=signal.shape[-1], oversampling_rate=2, lowpass_order=1, carrier_freq=0)
-        #     assert np.all(np.diff(true_scale, axis=-1) == 0)
-        #     true_scale = true_scale[:, :, :, 0]
-
-        loss = loss_recon * args.loss_recon_coeff + loss_pred
+        loss = loss_pred  # recon loss will not update any module anyways due to param freezing.
         loss.backward()
         optimizer.step()
 
@@ -155,23 +170,54 @@ def main(args):
 
     loss_fn_pred = nn.BCEWithLogitsLoss()
 
-    if not os.path.isfile(args.model_save_path):
+    # 1. Pretraining.
+    if not os.path.isfile(args.model_pretrain_save_path):
         optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
         scheduler = LinearWarmupCosineAnnealingLR(optimizer=optimizer,
                                                 warmup_start_lr=args.lr * 1e-3,
-                                                warmup_epochs=min(20, args.epoch//5),
-                                                max_epochs=args.epoch)
+                                                warmup_epochs=min(20, args.epoch_pretrain//5),
+                                                max_epochs=args.epoch_pretrain)
 
-        log('Training begins.', filepath=args.log_path)
+        log('Pretraining begins.', filepath=args.log_path)
+        with tqdm(range(args.epoch_pretrain)) as pbar:
+            for epoch in pbar:
+                model.train()
+                train_loss_recon = pretrain_epoch(args, train_loader=train_loader, model=model, optimizer=optimizer, device=device)
+
+                # Update learning rate.
+                scheduler.step()
+
+                # Update progress bar.
+                pbar.set_postfix(pretrain_recon=f'{train_loss_recon:.5f}', lr=optimizer.param_groups[0]['lr'])
+                log_string = f'(Pretraining) Epoch [{epoch + 1}/{args.epoch_pretrain}]. Train recon loss = {train_loss_recon:.5f}.'
+                log(log_string, filepath=args.log_path, to_console=False)
+
+                torch.save(model.state_dict(), args.model_pretrain_save_path)
+                log(f'Model weights of the latest pretraining model is saved to {args.model_pretrain_save_path}.', filepath=args.log_path, to_console=False)
+
+    model.load_state_dict(torch.load(args.model_pretrain_save_path), strict=False)
+    log(f'Model weights from pretraining is loaded from {args.model_pretrain_save_path}.', filepath=args.log_path, to_console=False)
+
+    # 2. Linear probing.
+    if not os.path.isfile(args.model_probing_save_path):
+        model.freeze()
+        model.unfreeze_classifier()
+        optimizer = optim.AdamW(model.classifier.parameters(), lr=args.lr, weight_decay=1e-4)
+        scheduler = LinearWarmupCosineAnnealingLR(optimizer=optimizer,
+                                                warmup_start_lr=args.lr * 1e-3,
+                                                warmup_epochs=min(20, args.epoch_probing//5),
+                                                max_epochs=args.epoch_probing)
+
+        log('Linear probing begins.', filepath=args.log_path)
         best_auroc = 0
         train_acc_list, train_auroc_list, val_acc_list, val_auroc_list = [], [], [], []
         train_loss_recon_list, train_loss_pred_list, val_loss_recon_list, val_loss_pred_list = [], [], [], []
-        with tqdm(range(args.epoch)) as pbar:
+        with tqdm(range(args.epoch_probing)) as pbar:
             for epoch in pbar:
-                # Training.
+                # Training (linear probing).
                 model.train()
                 train_loss_recon, train_loss_pred, train_acc, train_auroc = \
-                    train_epoch(train_loader=train_loader, model=model, optimizer=optimizer, loss_fn_pred=loss_fn_pred, num_classes=num_classes, device=device)
+                    linear_probe_epoch(train_loader=train_loader, model=model, optimizer=optimizer, loss_fn_pred=loss_fn_pred, num_classes=num_classes, device=device)
                 train_loss_recon_list.append(train_loss_recon)
                 train_loss_pred_list.append(train_loss_pred)
                 train_acc_list.append(train_acc)
@@ -195,15 +241,15 @@ def main(args):
                                 tr_acc=f'{100 * train_acc:.2f}', val_acc=f'{100 * val_acc:.2f}',
                                 tr_auroc=f'{100 * train_auroc:.2f}', val_auroc=f'{100 * val_auroc:.2f}',
                                 lr=optimizer.param_groups[0]['lr'])
-                log_string = f'Epoch [{epoch + 1}/{args.epoch}]. Train recon loss = {train_loss_recon:.5f}, pred loss = {train_loss_pred:.3f}, acc = {100 * train_acc:.3f}, auroc = {100 * train_auroc:.3f}.'
+                log_string = f'(Linear Probing) Epoch [{epoch + 1}/{args.epoch_probing}]. Train recon loss = {train_loss_recon:.5f}, pred loss = {train_loss_pred:.3f}, acc = {100 * train_acc:.3f}, auroc = {100 * train_auroc:.3f}.'
                 log_string += f'\nValidation recon loss = {val_loss_recon:.5f}, pred loss = {val_loss_pred:.3f}, acc = {100 * val_acc:.3f}, auroc = {100 * val_auroc:.3f}.'
                 log(log_string, filepath=args.log_path, to_console=False)
 
                 # Save best model.
                 if val_auroc > best_auroc:
                     best_auroc = val_auroc
-                    torch.save(model.state_dict(), args.model_save_path)
-                    log(f'Model weights with the best validation AUROC is saved to {args.model_save_path}.', filepath=args.log_path, to_console=False)
+                    torch.save(model.state_dict(), args.model_probing_save_path)
+                    log(f'Model weights with the best validation AUROC is saved to {args.model_probing_save_path}.', filepath=args.log_path, to_console=False)
 
                 # Save stats.
                 np.savez(args.results_stats_save_path,
@@ -218,8 +264,8 @@ def main(args):
                 )
 
     # Testing.
-    model.load_state_dict(torch.load(args.model_save_path))
-    log(f'Model weights is loaded from {args.model_save_path}.', filepath=args.log_path, to_console=False)
+    model.load_state_dict(torch.load(args.model_probing_save_path))
+    log(f'Model weights from linear probing is loaded from {args.model_probing_save_path}.', filepath=args.log_path, to_console=False)
 
     log('Testing begins.', filepath=args.log_path)
     model.eval()
@@ -237,7 +283,8 @@ if __name__ == '__main__':
     parser.add_argument('--direct-supervision', action='store_true')              # Use the analytical Blaschke coeffs to supervise training.
     parser.add_argument('--lr', help='Learning rate.', type=float, default=1e-2)
     parser.add_argument('--batch-size', type=int, default=256)
-    parser.add_argument('--epoch', type=int, default=40)
+    parser.add_argument('--epoch-pretrain', type=int, default=20)
+    parser.add_argument('--epoch-probing', type=int, default=30)
     parser.add_argument('--num-workers', type=int, default=8)
     parser.add_argument('--random-seed', type=int, default=1)
     parser.add_argument('--subset', type=str, default='super_class')
@@ -249,10 +296,11 @@ if __name__ == '__main__':
     ROOT_DIR = '/'.join(os.path.realpath(__file__).split('/')[:-2])
     args.data_dir = args.data_dir.replace('$ROOT_DIR', ROOT_DIR)
 
-    curr_run_identifier = f'ECG_PTBXL/subset={args.subset}-{args.training_percentage}%_BN1d-L{args.layers}_DS-{args.direct_supervision}_detach-{args.detach_by_iter}_patch-{args.patch_size}_lr-{args.lr}_epoch-{args.epoch}_seed-{args.random_seed}'
+    curr_run_identifier = f'ECG_PTBXL/subset={args.subset}-{args.training_percentage}%_BN1d-L{args.layers}_DS-{args.direct_supervision}_detach-{args.detach_by_iter}_patch-{args.patch_size}_lr-{args.lr}_epochPT-{args.epoch_pretrain}-PR-{args.epoch_probing}_seed-{args.random_seed}'
     args.results_dir = os.path.join(ROOT_DIR, 'results', curr_run_identifier)
     args.log_path = os.path.join(args.results_dir, 'log.txt')
-    args.model_save_path = os.path.join(args.results_dir, 'model.pty')
+    args.model_pretrain_save_path = os.path.join(args.results_dir, 'model_pretrain.pty')
+    args.model_probing_save_path = os.path.join(args.results_dir, 'model_probing.pty')
     args.results_stats_save_path = os.path.join(args.results_dir, 'results_stats.npz')
 
     os.makedirs(args.results_dir, exist_ok=True)
