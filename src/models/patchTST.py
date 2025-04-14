@@ -183,7 +183,7 @@ class TSTEncoderLayer(nn.Module):
                  norm='BatchNorm', attn_dropout=0, dropout=0., bias=True,
                  activation="gelu", res_attention=False, pre_norm=False):
         super().__init__()
-        assert not d_model%n_heads, f"d_model ({d_model}) must be divisible by n_heads ({n_heads})"
+        assert not d_model % n_heads, f"d_model ({d_model}) must be divisible by n_heads ({n_heads})"
         d_k = d_model // n_heads
         d_v = d_model // n_heads
 
@@ -220,7 +220,7 @@ class TSTEncoderLayer(nn.Module):
         self.pre_norm = pre_norm
         self.store_attn = store_attn
 
-    def forward(self, src:Tensor, prev:Optional[Tensor]=None):
+    def forward(self, src: Tensor, prev: Optional[Tensor] = None):
         '''
         src: tensor [bs x q_len x d_model]
         '''

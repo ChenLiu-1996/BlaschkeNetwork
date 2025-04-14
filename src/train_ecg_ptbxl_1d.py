@@ -90,15 +90,17 @@ def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes, devic
 def infer(loader, model, loss_fn_pred, num_classes, device):
     avg_loss_recon, avg_loss_pred, acc, auroc = 0, 0, 0, 0
     y_true_arr, y_pred_arr = None, None
+    residual_by_iter = 0
 
     for x, y_true in loader:
         x = x.to(device)
-        y_pred, residual_signals_sqsum, _ = model(x)
-        loss_recon = residual_signals_sqsum.mean()
+        y_pred, residual_sqnorm, blaschke_coeffs = model(x)
+        loss_recon = residual_sqnorm.mean()
         loss_pred = loss_fn_pred(y_pred, y_true.to(device))
 
         avg_loss_recon += loss_recon.item()
         avg_loss_pred += loss_pred.item()
+        residual_by_iter += residual_sqnorm.detach().cpu().numpy().mean(0)
 
         if y_true_arr is None:
             y_true_arr = y_true.detach().cpu().numpy()
@@ -109,6 +111,7 @@ def infer(loader, model, loss_fn_pred, num_classes, device):
 
     avg_loss_recon /= len(loader)
     avg_loss_pred /= len(loader)
+    residual_by_iter /= len(loader)
 
     acc_by_class, auroc_by_class = [], []
     for class_idx in range(num_classes):
@@ -123,7 +126,7 @@ def infer(loader, model, loss_fn_pred, num_classes, device):
 
     acc = np.mean(acc_by_class)
     auroc = np.mean(auroc_by_class)
-    return avg_loss_recon, avg_loss_pred, acc, auroc
+    return avg_loss_recon, avg_loss_pred, residual_by_iter, acc, auroc
 
 def main(args):
     # Log the config.
@@ -176,7 +179,7 @@ def main(args):
 
                 # Validation.
                 model.eval()
-                val_loss_recon, val_loss_pred, val_acc, val_auroc = \
+                val_loss_recon, val_loss_pred, val_residual_by_iter, val_acc, val_auroc = \
                     infer(loader=val_loader, model=model, loss_fn_pred=loss_fn_pred, num_classes=num_classes, device=device)
                 val_loss_recon_list.append(val_loss_recon)
                 val_loss_pred_list.append(val_loss_pred)
@@ -193,7 +196,7 @@ def main(args):
                                 tr_auroc=f'{100 * train_auroc:.2f}', val_auroc=f'{100 * val_auroc:.2f}',
                                 lr=optimizer.param_groups[0]['lr'])
                 log_string = f'Epoch [{epoch + 1}/{args.epoch}]. Train recon loss = {train_loss_recon:.5f}, pred loss = {train_loss_pred:.3f}, acc = {100 * train_acc:.3f}, auroc = {100 * train_auroc:.3f}.'
-                log_string += f'\nValidation recon loss = {val_loss_recon:.5f}, pred loss = {val_loss_pred:.3f}, acc = {100 * val_acc:.3f}, auroc = {100 * val_auroc:.3f}.'
+                log_string += f'\nValidation recon loss = {val_loss_recon:.5f}, pred loss = {val_loss_pred:.3f}, acc = {100 * val_acc:.3f}, auroc = {100 * val_auroc:.3f}, val_residual_by_iter = {val_residual_by_iter}.'
                 log(log_string, filepath=args.log_path, to_console=False)
 
                 # Save best model.
@@ -203,27 +206,29 @@ def main(args):
                     log(f'Model weights with the best validation AUROC is saved to {args.model_save_path}.', filepath=args.log_path, to_console=False)
 
                 # Save stats.
-                np.savez(args.results_stats_save_path,
-                        train_acc_list=100*np.array(train_acc_list).astype(np.float16),
-                        val_acc_list=100*np.array(val_acc_list).astype(np.float16),
-                        train_auroc_list=100*np.array(train_auroc_list).astype(np.float16),
-                        val_auroc_list=100*np.array(val_auroc_list).astype(np.float16),
-                        train_loss_pred_list=np.array(train_loss_pred_list).astype(np.float16),
-                        train_loss_recon_list=np.array(train_loss_recon_list).astype(np.float16),
-                        val_loss_pred_list=np.array(val_loss_pred_list).astype(np.float16),
-                        val_loss_recon_list=np.array(val_loss_recon_list).astype(np.float16),
+                np.savez(
+                    args.results_stats_save_path,
+                    train_acc_list=100*np.array(train_acc_list).astype(np.float16),
+                    val_acc_list=100*np.array(val_acc_list).astype(np.float16),
+                    train_auroc_list=100*np.array(train_auroc_list).astype(np.float16),
+                    val_auroc_list=100*np.array(val_auroc_list).astype(np.float16),
+                    train_loss_pred_list=np.array(train_loss_pred_list).astype(np.float16),
+                    train_loss_recon_list=np.array(train_loss_recon_list).astype(np.float16),
+                    val_loss_pred_list=np.array(val_loss_pred_list).astype(np.float16),
+                    val_loss_recon_list=np.array(val_loss_recon_list).astype(np.float16),
+                    val_residual_by_iter=np.array(val_residual_by_iter).astype(np.float16),
                 )
 
     # Testing.
-    model.load_state_dict(torch.load(args.model_save_path))
+    model.load_state_dict(torch.load(args.model_save_path, map_location=device))
     log(f'Model weights is loaded from {args.model_save_path}.', filepath=args.log_path, to_console=False)
 
     log('Testing begins.', filepath=args.log_path)
     model.eval()
-    test_loss_recon, test_loss_pred, test_acc, test_auroc = \
+    test_loss_recon, test_loss_pred, test_residual_by_iter, test_acc, test_auroc = \
         infer(loader=test_loader, model=model, loss_fn_pred=loss_fn_pred, num_classes=num_classes, device=device)
 
-    log_string = f'\nTest recon loss = {test_loss_recon:.5f}, pred loss = {test_loss_pred:.3f}, acc = {100 * test_acc:.3f}, auroc = {100 * test_auroc:.3f}.'
+    log_string = f'\nTest recon loss = {test_loss_recon:.5f}, pred loss = {test_loss_pred:.3f}, acc = {100 * test_acc:.3f}, auroc = {100 * test_auroc:.3f}, test_residual_by_iter = {test_residual_by_iter}.'
     log(log_string, filepath=args.log_path, to_console=False)
 
 

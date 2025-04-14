@@ -23,6 +23,43 @@ def any_requires_grad(module: nn.Module) -> bool:
             any_grad = True
     return any_grad
 
+class DynamicTanh(nn.Module):
+    '''
+    Transformers without Normalization.
+    https://arxiv.org/pdf/2503.10622
+    '''
+    def __init__(self, normalized_shape, channels_last, alpha_init_value=0.5):
+        super().__init__()
+        self.normalized_shape = normalized_shape
+        self.alpha_init_value = alpha_init_value
+        self.channels_last = channels_last
+
+        self.alpha = nn.Parameter(torch.ones(1) * alpha_init_value)
+        self.weight = nn.Parameter(torch.ones(normalized_shape))
+        self.bias = nn.Parameter(torch.zeros(normalized_shape))
+
+    def forward(self, x):
+        x = torch.tanh(self.alpha * x)
+        if self.channels_last:
+            x = x * self.weight + self.bias
+        else:
+            x = x * self.weight[:, None, None] + self.bias[:, None, None]
+        return x
+
+    def extra_repr(self):
+        return f"normalized_shape={self.normalized_shape}, alpha_init_value={self.alpha_init_value}, channels_last={self.channels_last}"
+
+def convert_ln_to_dyt(module):
+    module_output = module
+    if isinstance(module, nn.LayerNorm):
+        # Assuming we do not have timm.layers.LayerNorm2d
+        module_output = DynamicTanh(module.normalized_shape, True)
+    for name, child in module.named_children():
+        module_output.add_module(name, convert_ln_to_dyt(child))
+    del module
+    return module_output
+
+
 class BlaschkeLayer1d(nn.Module):
     '''
     Blaschke Layer for 1D signals.
@@ -58,18 +95,19 @@ class BlaschkeLayer1d(nn.Module):
 
         self.dummy_tensor = torch.ones(1, dtype=torch.float32, requires_grad=True)  # To facilitate checkpointing.
         self.eps = eps
+
         self.to(device)
 
     def __repr__(self):
         return (f"BlaschkeLayer1d("
                 f"num_blaschke={self.num_blaschke})")
 
-    def activation(self, x: torch.Tensor) -> torch.Tensor:
-        '''
-        Custom activation function used in the BlaschkeLayer1d.
-        '''
-        output = torch.arctan(x) + torch.pi / 2
-        return output
+    # def activation(self, x: torch.Tensor) -> torch.Tensor:
+    #     '''
+    #     Custom activation function used in the BlaschkeLayer1d.
+    #     '''
+    #     output = torch.arctan(x) + torch.pi / 2
+    #     return output
 
     def estimate_blaschke_parameters(self, x: torch.Tensor) -> torch.Tensor:
         '''
@@ -117,7 +155,8 @@ class BlaschkeLayer1d(nn.Module):
                 outputs, shape [B, C, L] (batch size, channel, signal length)
         '''
         frac = (x - self.alpha.unsqueeze(-1)) / self.beta.unsqueeze(-1)
-        theta_x = self.activation(frac)
+        # theta_x = self.activation(frac)
+        theta_x = torch.sigmoid(frac)
         blaschke_factor = torch.exp(1j * theta_x)
         return blaschke_factor
 
@@ -236,23 +275,25 @@ class BlaschkeNetwork1d(nn.Module):
         #   alpha, log_beta, scale_real, scale_imaginary
         num_blaschke_params = 4
 
-        self.param_net = Ignore2ndArg(  # `Ignore2ndArg` is a wrapper to facilitate checkpointing.
-            PatchTST(
-                num_channels=2,         # (real, imaginary)
-                num_classes=num_blaschke_params,
-                patch_size=patch_size,
-                num_patch=signal_len // patch_size,
-                n_layers=param_net_depth,
-                n_heads=param_net_heads,
-                d_model=param_net_dim,
-                shared_embedding=True,
-                d_ff=param_net_mlp_dim,
-                dropout=0.2,
-                head_dropout=0.2,
-                act='gelu',
-                norm='layernorm',
-                res_attention=False,
-        ))
+        param_net = PatchTST(
+            num_channels=2,         # (real, imaginary)
+            num_classes=num_blaschke_params,
+            patch_size=patch_size,
+            num_patch=signal_len // patch_size,
+            n_layers=param_net_depth,
+            n_heads=param_net_heads,
+            d_model=param_net_dim,
+            shared_embedding=True,
+            d_ff=param_net_mlp_dim,
+            dropout=0.2,
+            head_dropout=0.2,
+            act='gelu',
+            norm='layernorm',
+            res_attention=False,
+        )
+        self.param_net = Ignore2ndArg(   # `Ignore2ndArg` is a wrapper to facilitate checkpointing.
+            convert_ln_to_dyt(param_net) # Replace layernorm with dynamic Tanh.
+        )
 
         # Initialize the BNLayers
         self.encoder = nn.ModuleList([])
@@ -359,7 +400,7 @@ class BlaschkeNetwork1d(nn.Module):
         signal_complex = self.complexify(x)
 
         blaschke_factors = []
-        residual_signal, residual_sqnorm = signal_complex, 0
+        residual_signal, residual_sqnorm = signal_complex, None
         blaschke_coeffs = None
 
         for layer in self.encoder:
@@ -377,8 +418,14 @@ class BlaschkeNetwork1d(nn.Module):
 
             # F_{n+1} = F_n - s_n * B_1 * ... * B_n.
             residual_signal = residual_signal - curr_signal_approx
-            residual_sqnorm = residual_sqnorm + torch.real(residual_signal).pow(2).mean()
 
+            # This helps sanity checking the residual norms at each iteration.
+            if residual_sqnorm is None:
+                residual_sqnorm = torch.real(residual_signal).pow(2).mean(dim=(1,2)).unsqueeze(1)
+            else:
+                residual_sqnorm = torch.cat((residual_sqnorm,
+                                             torch.real(residual_signal).pow(2).mean(dim=(1,2)).unsqueeze(1)),
+                                            dim=1)
             if self.detach_by_iter:
                 # Detach the gradient so that each iteration is penalized separately.
                 residual_signal = residual_signal.detach()
