@@ -102,12 +102,12 @@ class BlaschkeLayer1d(nn.Module):
         return (f"BlaschkeLayer1d("
                 f"num_blaschke={self.num_blaschke})")
 
-    # def activation(self, x: torch.Tensor) -> torch.Tensor:
-    #     '''
-    #     Custom activation function used in the BlaschkeLayer1d.
-    #     '''
-    #     output = torch.arctan(x) + torch.pi / 2
-    #     return output
+    def activation(self, x: torch.Tensor) -> torch.Tensor:
+        '''
+        Custom activation function used in the BlaschkeLayer1d.
+        '''
+        output = torch.arctan(x) + torch.pi / 2
+        return output
 
     def estimate_blaschke_parameters(self, x: torch.Tensor) -> torch.Tensor:
         '''
@@ -155,8 +155,8 @@ class BlaschkeLayer1d(nn.Module):
                 outputs, shape [B, C, L] (batch size, channel, signal length)
         '''
         frac = (x - self.alpha.unsqueeze(-1)) / self.beta.unsqueeze(-1)
-        # theta_x = self.activation(frac)
-        theta_x = torch.sigmoid(frac)
+        theta_x = self.activation(frac)
+        # theta_x = torch.sigmoid(frac)
         blaschke_factor = torch.exp(1j * theta_x)
         return blaschke_factor
 
