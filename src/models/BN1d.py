@@ -309,7 +309,7 @@ class BlaschkeNetwork1d(nn.Module):
                                 device=device)
             )
 
-        num_features = num_channels * num_classes
+        num_features = self.layers * self.num_channels * num_classes
 
         # In linear probing, only this is updated.
         # This is technically not a linear probing, but rather a two-stage training.
@@ -403,7 +403,7 @@ class BlaschkeNetwork1d(nn.Module):
         signal_complex = self.complexify(x)
 
         blaschke_factors = []
-        residual_signal, residual_sqnorm = signal_complex, None
+        residual_signal, residual_sqnorm, weighting_coeffs = signal_complex, None, None
         blaschke_coeffs = None
 
         for layer in self.encoder:
@@ -430,6 +430,12 @@ class BlaschkeNetwork1d(nn.Module):
                 residual_sqnorm = curr_sqnorm
             else:
                 residual_sqnorm = torch.cat((residual_sqnorm, curr_sqnorm), dim=0)
+
+            if weighting_coeffs is None:
+                weighting_coeffs = layer.gamma.unsqueeze(-1)
+            else:
+                weighting_coeffs = torch.cat((weighting_coeffs, layer.gamma.unsqueeze(-1)), dim=-1)
+
             if self.detach_by_iter:
                 # Detach the gradient so that each iteration is penalized separately.
                 residual_signal = residual_signal.detach()
@@ -437,7 +443,12 @@ class BlaschkeNetwork1d(nn.Module):
             # NOTE: Currently, the model is trained end-to-end, where the Blaschke parameters
             # are used for downstream classification, and the gradient for classification can be backproped
             # through the Blaschke networks (param_net).
-            curr_iter_coeffs = torch.hstack((layer.alpha, layer.beta, torch.real(layer.scale), torch.imag(layer.scale)))
+            curr_iter_coeffs = torch.cat((rearrange(layer.alpha, 'b c r -> b (c r)'),
+                                          rearrange(layer.beta, 'b c r -> b (c r)'),
+                                          rearrange(layer.gamma, 'b c r -> b (c r)'),
+                                          rearrange(torch.real(layer.scale), 'b c r -> b (c r)'),
+                                          rearrange(torch.imag(layer.scale), 'b c r -> b (c r)')),
+                                         dim=1)
             if blaschke_coeffs is None:
                 blaschke_coeffs = curr_iter_coeffs
             else:
@@ -445,7 +456,7 @@ class BlaschkeNetwork1d(nn.Module):
 
         y_pred = self.classifier(blaschke_coeffs)
 
-        return y_pred, residual_sqnorm, blaschke_coeffs
+        return y_pred, residual_sqnorm, weighting_coeffs
 
 
     def to(self, device: str):
