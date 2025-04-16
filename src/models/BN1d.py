@@ -76,22 +76,21 @@ class BlaschkeLayer1d(nn.Module):
     Attributes:
     -----------
         param_net (torch.nn.Module): Neural network to extract Blaschke parameters.
-        num_blaschke (int): Number of Blaschke components.
+        num_roots (int): Number of Blaschke roots.
         eps (float): Small number for numerical stability.
         device (torch.device): Torch device.
     '''
 
     def __init__(self,
                  param_net: torch.nn.Module,
-                 num_blaschke: int = 1,
+                 num_roots: int = 1,
                  eps: float = 1e-11,
                  device: str = 'cpu') -> None:
 
         super().__init__()
 
         self.param_net = param_net
-        self.num_blaschke = num_blaschke
-        assert self.num_blaschke == 1, 'Current implementation only supports 1 Blaschke factor.'
+        self.num_roots = num_roots
 
         self.dummy_tensor = torch.ones(1, dtype=torch.float32, requires_grad=True)  # To facilitate checkpointing.
         self.eps = eps
@@ -100,7 +99,7 @@ class BlaschkeLayer1d(nn.Module):
 
     def __repr__(self):
         return (f"BlaschkeLayer1d("
-                f"num_blaschke={self.num_blaschke})")
+                f"num_roots={self.num_roots})")
 
     def activation(self, x: torch.Tensor) -> torch.Tensor:
         '''
@@ -134,9 +133,15 @@ class BlaschkeLayer1d(nn.Module):
             params = self.param_net(x, self.dummy_tensor)              # [batch_size * num_channels, 4]
         params = rearrange(params, '(b c) p -> b c p', b=B, c=C)       # [batch_size, num_channels, 4]
 
-        alpha, log_beta, scale_real, scale_imag = params[..., 0], params[..., 1], params[..., 2], params[..., 3]
+        alpha = params[..., :self.num_roots]
+        log_beta = params[..., self.num_roots : self.num_roots * 2]
+        gamma = params[..., self.num_roots * 2 : self.num_roots * 3]
+        scale_real = params[..., self.num_roots * 3:self.num_roots * 3 + 1]
+        scale_imag = params[..., self.num_roots * 3 + 1 : self.num_roots * 3 + 2]
+
         self.alpha = alpha
-        self.beta = torch.exp(log_beta + self.eps)
+        self.beta = torch.exp(log_beta + self.eps)  # beta has to be positive.
+        self.gamma = torch.sigmoid(gamma)           # gamma has to be between 0 and 1.
         self.scale = scale_real + 1j * scale_imag
         return
 
@@ -154,9 +159,15 @@ class BlaschkeLayer1d(nn.Module):
             y : 3D torch.float
                 outputs, shape [B, C, L] (batch size, channel, signal length)
         '''
-        frac = (x - self.alpha.unsqueeze(-1)) / self.beta.unsqueeze(-1)
-        theta_x = self.activation(frac)
-        blaschke_factor = torch.exp(1j * theta_x)
+
+        x = x.unsqueeze(2)                               # [B, C, 1, L]
+        alpha = self.alpha.unsqueeze(-1)                 # [B, C, R, 1]
+        beta = self.beta.unsqueeze(-1)                   # [B, C, R, 1]
+        gamma = self.gamma.unsqueeze(-1)                 # [B, C, R, 1]
+        activated = self.activation((x - alpha) / beta)  # [B, C, R, L]
+        phase = (gamma * activated).sum(dim=2)           # sum over roots (R) → [B, C, L]
+
+        blaschke_factor = torch.exp(1j * phase)
         return blaschke_factor
 
     def to(self, device: str):
@@ -178,7 +189,7 @@ class BlaschkeLayer1d(nn.Module):
 
         Example
         -------
-        >>> model = BlaschkeLayer1d(signal_len=100, signal_channel=10, num_blaschke=1)
+        >>> model = BlaschkeLayer1d(signal_len=100, signal_channel=10, num_roots=1)
         >>> x = torch.normal(0, 1, size=(32, 10, 100))
         >>> y = model(x)
         '''
@@ -227,7 +238,7 @@ class BlaschkeNetwork1d(nn.Module):
         layers (int): Number of Blaschke Network layers.
         detach_by_iter (bool): If true, penalize approximation of each iteration independently.
         out_classes (int): Number of output classes in the classification problem.
-        num_blaschke_list (List[int]): Number of Blaschke factors in each layer.
+        num_roots (int): Number of Blaschke roots in each layer.
 
         param_net_dim (int): Param Net (Transformer) transformer dimension.
         param_net_depth (int): Param Net (Transformer) numbet of layers.
@@ -246,7 +257,7 @@ class BlaschkeNetwork1d(nn.Module):
                  layers: int = 1,
                  detach_by_iter: bool = False,
                  out_classes: int = 10,
-                 num_blaschke_list: List[int] = None,
+                 num_roots: int = 16,
                  param_net_dim: int = 64,
                  param_net_depth: int = 2,
                  param_net_heads: int = 4,
@@ -263,20 +274,13 @@ class BlaschkeNetwork1d(nn.Module):
         self.out_classes = out_classes
         self.layers = layers
         self.detach_by_iter = detach_by_iter
-        self.num_blaschke_list = num_blaschke_list
+        self.num_roots = num_roots
 
-        if self.num_blaschke_list is None:
-            # Determine Blaschke parameters if not provided
-            self.num_blaschke_list = [1 for _ in range(self.layers)]
-
-        # Initialize learnable parameters for computing Blaschke product.
-        # 4 output neurons, respectively for:
-        #   alpha, log_beta, scale_real, scale_imaginary
-        num_blaschke_params = 4
-
+        # 3 per root (alpha, log_beta, gamma), 2 per iteration: scale_real, scale_imaginary
+        num_classes = self.num_roots * 3 + 2
         param_net = PatchTST(
-            num_channels=2,         # (real, imaginary)
-            num_classes=num_blaschke_params,
+            num_channels=2,  # (real, imaginary)
+            num_classes=num_classes,
             patch_size=patch_size,
             num_patch=signal_len // patch_size,
             n_layers=param_net_depth,
@@ -290,22 +294,22 @@ class BlaschkeNetwork1d(nn.Module):
             norm='layernorm',
             res_attention=False,
         )
-        self.param_net = Ignore2ndArg(   # `Ignore2ndArg` is a wrapper to facilitate checkpointing.
-            convert_ln_to_dyt(param_net) # Replace layernorm with dynamic Tanh.
+        self.param_net = Ignore2ndArg(    # `Ignore2ndArg` is a wrapper to facilitate checkpointing.
+            convert_ln_to_dyt(param_net)  # Replace layernorm with dynamic Tanh.
         )
 
         # Initialize the BNLayers
         self.encoder = nn.ModuleList([])
 
-        for layer_idx in range(self.layers):
+        for _ in range(self.layers):
             self.encoder.append(
-                BlaschkeLayer1d(num_blaschke=self.num_blaschke_list[layer_idx],
+                BlaschkeLayer1d(num_roots=self.num_roots,
                                 param_net=self.param_net,
                                 eps=eps,
                                 device=device)
             )
 
-        num_features = sum(self.num_blaschke_list) * num_channels * num_blaschke_params
+        num_features = num_channels * num_classes
 
         # In linear probing, only this is updated.
         # This is technically not a linear probing, but rather a two-stage training.
@@ -415,7 +419,7 @@ class BlaschkeNetwork1d(nn.Module):
 
             # The Blaschke approximation is given by
             # s_n * B_1 * B_2 * ... * B_n.
-            curr_signal_approx = layer.scale.unsqueeze(-1) * blaschke_product
+            curr_signal_approx = layer.scale * blaschke_product
 
             # F_{n+1} = F_n - s_n * B_1 * ... * B_n.
             residual_signal = residual_signal - curr_signal_approx

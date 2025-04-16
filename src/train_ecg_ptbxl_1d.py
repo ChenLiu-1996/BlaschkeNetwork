@@ -144,6 +144,7 @@ def main(args):
         signal_len=5000,
         num_channels=12,
         layers=args.layers,
+        num_roots=args.roots,
         detach_by_iter=args.detach_by_iter,
         patch_size=args.patch_size,
         out_classes=num_classes)
@@ -235,12 +236,13 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--layers', type=int, default=1)
+    parser.add_argument('--roots', type=int, default=16)
     parser.add_argument('--detach-by-iter', action='store_true')                  # Independently optimize Blaschke decomposition per iteration.
     parser.add_argument('--direct-supervision', action='store_true')              # Use the analytical Blaschke coeffs to supervise training.
     parser.add_argument('--lr', help='Learning rate.', type=float, default=1e-2)
     parser.add_argument('--batch-size', type=int, default=256)
     parser.add_argument('--epoch', type=int, default=40)
-    parser.add_argument('--loss-recon-coeff', type=float, default=1e1)
+    parser.add_argument('--loss-recon-coeff', type=float, default=1.0)
     parser.add_argument('--num-workers', type=int, default=8)
     parser.add_argument('--random-seed', type=int, default=1)
     parser.add_argument('--subset', type=str, default='super_class')
@@ -252,7 +254,7 @@ if __name__ == '__main__':
     ROOT_DIR = '/'.join(os.path.realpath(__file__).split('/')[:-2])
     args.data_dir = args.data_dir.replace('$ROOT_DIR', ROOT_DIR)
 
-    curr_run_identifier = f'ECG_PTBXL/subset={args.subset}-{args.training_percentage}%_BN1d-L{args.layers}_DS-{args.direct_supervision}_detach-{args.detach_by_iter}_patch-{args.patch_size}_reconCoeff-{args.loss_recon_coeff}_lr-{args.lr}_epoch-{args.epoch}_seed-{args.random_seed}'
+    curr_run_identifier = f'ECG_PTBXL/subset={args.subset}-{args.training_percentage}%_BN1d-L{args.layers}_R{args.roots}_DS-{args.direct_supervision}_detach-{args.detach_by_iter}_patch-{args.patch_size}_reconCoeff-{args.loss_recon_coeff}_lr-{args.lr}_epoch-{args.epoch}_seed-{args.random_seed}'
     args.results_dir = os.path.join(ROOT_DIR, 'results', curr_run_identifier)
     args.log_path = os.path.join(args.results_dir, 'log.txt')
     args.model_save_path = os.path.join(args.results_dir, 'model.pty')
