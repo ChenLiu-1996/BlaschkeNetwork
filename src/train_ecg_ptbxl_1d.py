@@ -37,7 +37,7 @@ def load_ptbxl(args):
 
 
 def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes, device):
-    train_loss_pred, train_loss_recon, train_loss_indicator, train_acc, train_auroc = 0, 0, 0, 0
+    train_loss_pred, train_loss_recon, train_loss_indicator, train_acc, train_auroc = 0, 0, 0, 0, 0
     y_true_arr, y_pred_arr = None, None
 
     for (x, y_true) in train_loader:
