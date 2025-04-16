@@ -156,7 +156,6 @@ class BlaschkeLayer1d(nn.Module):
         '''
         frac = (x - self.alpha.unsqueeze(-1)) / self.beta.unsqueeze(-1)
         theta_x = self.activation(frac)
-        # theta_x = torch.sigmoid(frac)
         blaschke_factor = torch.exp(1j * theta_x)
         return blaschke_factor
 
@@ -408,9 +407,11 @@ class BlaschkeNetwork1d(nn.Module):
 
             # Blaschke product is the cumulative product of Blaschke factors
             # B_1 * B_2 * ... * B_n.
-            blaschke_product = 1
-            for blaschke_factor in blaschke_factors:
-                blaschke_product = blaschke_product * blaschke_factor
+            blaschke_product = blaschke_factors[-1]
+            for blaschke_factor in blaschke_factors[:-1]:
+                if self.detach_by_iter:
+                    # Detach the gradient so that each iteration is penalized separately.
+                    blaschke_product = blaschke_product * blaschke_factor.detach()
 
             # The Blaschke approximation is given by
             # s_n * B_1 * B_2 * ... * B_n.
@@ -420,12 +421,11 @@ class BlaschkeNetwork1d(nn.Module):
             residual_signal = residual_signal - curr_signal_approx
 
             # This helps sanity checking the residual norms at each iteration.
+            curr_sqnorm = torch.real(residual_signal).pow(2).mean().unsqueeze(0)
             if residual_sqnorm is None:
-                residual_sqnorm = torch.real(residual_signal).pow(2).mean(dim=(1,2)).unsqueeze(1)
+                residual_sqnorm = curr_sqnorm
             else:
-                residual_sqnorm = torch.cat((residual_sqnorm,
-                                             torch.real(residual_signal).pow(2).mean(dim=(1,2)).unsqueeze(1)),
-                                            dim=1)
+                residual_sqnorm = torch.cat((residual_sqnorm, curr_sqnorm), dim=0)
             if self.detach_by_iter:
                 # Detach the gradient so that each iteration is penalized separately.
                 residual_signal = residual_signal.detach()
@@ -453,5 +453,4 @@ class BlaschkeNetwork1d(nn.Module):
 if __name__ == '__main__':
     model = BlaschkeNetwork1d(layers=3, signal_len=100, num_channels=10, patch_size=20)
     x = torch.normal(0, 1, size=(32, 10, 100))
-    y, x_approximations = model(x)
-
+    y, residual_sqnorm, blaschke_coeffs = model(x)

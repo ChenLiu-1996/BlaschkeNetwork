@@ -100,7 +100,7 @@ def infer(loader, model, loss_fn_pred, num_classes, device):
 
         avg_loss_recon += loss_recon.item()
         avg_loss_pred += loss_pred.item()
-        residual_by_iter += residual_sqnorm.detach().cpu().numpy().mean(0)
+        residual_by_iter += residual_sqnorm.detach().cpu().numpy()
 
         if y_true_arr is None:
             y_true_arr = y_true.detach().cpu().numpy()
@@ -240,7 +240,7 @@ if __name__ == '__main__':
     parser.add_argument('--lr', help='Learning rate.', type=float, default=1e-2)
     parser.add_argument('--batch-size', type=int, default=256)
     parser.add_argument('--epoch', type=int, default=40)
-    parser.add_argument('--loss-recon-coeff', type=float, default=1e-1)
+    parser.add_argument('--loss-recon-coeff', type=float, default=1e1)
     parser.add_argument('--num-workers', type=int, default=8)
     parser.add_argument('--random-seed', type=int, default=1)
     parser.add_argument('--subset', type=str, default='super_class')
