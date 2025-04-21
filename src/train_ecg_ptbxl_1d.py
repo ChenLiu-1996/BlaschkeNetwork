@@ -16,7 +16,7 @@ from nn_utils.scheduler import LinearWarmupCosineAnnealingLR
 from nn_utils.seed import seed_everything
 from nn_utils.log import log, count_parameters
 from dataset.ecg_datasets import get_ecg_dataset
-# from analytical.analytical_decomposition import blaschke_decomposition
+from analytical.analytical_decomposition import blaschke_decomposition, display_blaschke_product
 
 
 def load_ptbxl(args):

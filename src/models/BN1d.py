@@ -502,21 +502,6 @@ class BlaschkeNetwork1d(nn.Module):
         self.device = device
         return self
 
-def display_blaschke_product(order: int):
-    '''
-    A helper function to print the blaschke product in cumulative product.
-    '''
-    blaschke_product_str = ''
-    if order == 1:
-        blaschke_product_str += 'B_1'
-    elif order == 2:
-        blaschke_product_str += '(B_1 * B_2)'
-    elif order == 3:
-        blaschke_product_str += '(B_1 * B_2 * B_3)'
-    else:
-        blaschke_product_str += f'(B_1 * B_2 *...* B_{order})'
-    return blaschke_product_str
-
 
 if __name__ == '__main__':
     model = BlaschkeNetwork1d(layers=1, signal_len=100, num_channels=10, patch_size=20)
