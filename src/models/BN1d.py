@@ -381,6 +381,42 @@ class BlaschkeNetwork1d(nn.Module):
         signal = torch.from_numpy(signal).to(x.device)
         return signal
 
+    @torch.no_grad()
+    def test_approximate(self, x: torch.Tensor) -> torch.Tensor:
+        # Input should be a [B, C, L] signal.
+        assert len(x.shape) == 3
+        # Complexify the signal using hilbert transform.
+        signal_complex = self.complexify(x)
+
+        blaschke_factors = []
+        s_arr, B_prod_arr = None, None
+
+        residual_signal = signal_complex
+        for layer in self.encoder:
+            blaschke_factors.append(layer(residual_signal))
+
+            # Blaschke product is the cumulative product of Blaschke factors
+            # B_1 * B_2 * ... * B_n.
+            blaschke_product = 1
+            for blaschke_factor in blaschke_factors:
+                blaschke_product = blaschke_product * blaschke_factor
+
+            # The Blaschke approximation is given by
+            # s_n * B_1 * B_2 * ... * B_n.
+            curr_signal_approx = layer.scale * blaschke_product
+
+            # F_{n+1} = F_n - s_n * B_1 * ... * B_n.
+            residual_signal = residual_signal - curr_signal_approx
+
+            if s_arr is None:
+                s_arr = layer.scale.unsqueeze(-1)
+                B_prod_arr = blaschke_product.unsqueeze(-1)
+            else:
+                s_arr = torch.cat((s_arr, layer.scale.unsqueeze(-1)), dim=-1)
+                B_prod_arr = torch.cat((B_prod_arr, blaschke_product.unsqueeze(-1)), dim=-1)
+
+        return signal_complex, s_arr, B_prod_arr
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         '''
         Args:
@@ -392,8 +428,10 @@ class BlaschkeNetwork1d(nn.Module):
         --------
             y_pred : 2D torch.float
                 outputs, shape [B, CLS] (batch size, number of classes)
-            residual_signals_sqsum : torch.float
+            residual_sqnorm : torch.float
                 squared norm of signal approximation error
+            weighting_coeffs: torch.float
+                model-predicted weighting coefficient for each Blaschke root
         '''
 
         # Input should be a [B, C, L] signal.
@@ -464,8 +502,24 @@ class BlaschkeNetwork1d(nn.Module):
         self.device = device
         return self
 
+def display_blaschke_product(order: int):
+    '''
+    A helper function to print the blaschke product in cumulative product.
+    '''
+    blaschke_product_str = ''
+    if order == 1:
+        blaschke_product_str += 'B_1'
+    elif order == 2:
+        blaschke_product_str += '(B_1 * B_2)'
+    elif order == 3:
+        blaschke_product_str += '(B_1 * B_2 * B_3)'
+    else:
+        blaschke_product_str += f'(B_1 * B_2 *...* B_{order})'
+    return blaschke_product_str
+
 
 if __name__ == '__main__':
-    model = BlaschkeNetwork1d(layers=3, signal_len=100, num_channels=10, patch_size=20)
+    model = BlaschkeNetwork1d(layers=1, signal_len=100, num_channels=10, patch_size=20)
     x = torch.normal(0, 1, size=(32, 10, 100))
     y, residual_sqnorm, blaschke_coeffs = model(x)
+    signal_complex, s_arr, B_prod_arr = model.test_approximate(x[:1, :1, :])

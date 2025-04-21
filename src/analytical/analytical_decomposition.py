@@ -238,8 +238,8 @@ if __name__ == '__main__':
 
     for total_order in range(1, blaschke_order + 1):
         for curr_order in range(1, total_order + 1):
-            ax[total_order - 1, curr_order].plot(time_arr, low_freq_component[curr_order].real, label = f'$G_{curr_order}$', color='darkblue', linestyle='--')
-            ax[total_order - 1, curr_order].plot(time_arr, (blaschke_product[curr_order-1] * low_freq_component[curr_order]).real, label = f'$G_{curr_order}$ * ${display_blaschke_product(curr_order)}$', color='darkgreen', alpha=0.6)
+            ax[total_order - 1, curr_order].plot(time_arr, low_freq_component[curr_order].real, label = f'$s_{curr_order}$', color='darkblue', linestyle='--')
+            ax[total_order - 1, curr_order].plot(time_arr, (blaschke_product[curr_order-1] * low_freq_component[curr_order]).real, label = f'$s_{curr_order}$ * ${display_blaschke_product(curr_order)}$', color='darkgreen', alpha=0.6)
             ax[total_order - 1, curr_order].legend(loc='lower left')
             ax[total_order - 1, curr_order].spines['top'].set_visible(False)
             ax[total_order - 1, curr_order].spines['right'].set_visible(False)
