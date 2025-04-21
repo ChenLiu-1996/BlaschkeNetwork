@@ -454,13 +454,19 @@ class BlaschkeNetwork1d(nn.Module):
                 if self.detach_by_iter:
                     # Detach the gradient so that each iteration is penalized separately.
                     blaschke_product = blaschke_product * blaschke_factor.detach()
+                else:
+                    blaschke_product = blaschke_product * blaschke_factor
 
             # The Blaschke approximation is given by
             # s_n * B_1 * B_2 * ... * B_n.
             curr_signal_approx = layer.scale * blaschke_product
 
             # F_{n+1} = F_n - s_n * B_1 * ... * B_n.
-            residual_signal = residual_signal - curr_signal_approx
+            if self.detach_by_iter:
+                # Detach the gradient so that each iteration is penalized separately.
+                residual_signal = residual_signal.detach() - curr_signal_approx
+            else:
+                residual_signal = residual_signal - curr_signal_approx
 
             # This helps sanity checking the residual norms at each iteration.
             curr_sqnorm = torch.real(residual_signal).pow(2).mean().unsqueeze(0)
@@ -473,10 +479,6 @@ class BlaschkeNetwork1d(nn.Module):
                 weighting_coeffs = layer.gamma.unsqueeze(-1)
             else:
                 weighting_coeffs = torch.cat((weighting_coeffs, layer.gamma.unsqueeze(-1)), dim=-1)
-
-            if self.detach_by_iter:
-                # Detach the gradient so that each iteration is penalized separately.
-                residual_signal = residual_signal.detach()
 
             # NOTE: Currently, the model is trained end-to-end, where the Blaschke parameters
             # are used for downstream classification, and the gradient for classification can be backproped

@@ -99,7 +99,8 @@ def plot_signal_approx(signal_complex, s_arr, B_prod_arr, mode: str, epoch_idx: 
                 ax[i, j].axis('off')
 
     if mode != 'test':
-        save_path = os.path.join(args.plot_folder, mode, f'epoch_{epoch_idx + 1}_batch_{batch_idx + 1}.png')
+        save_path = os.path.join(args.plot_folder, mode,
+                                 f'epoch_{str(epoch_idx + 1).zfill(3)}_batch_{str(batch_idx + 1).zfill(5)}.png')
     else:
         save_path = os.path.join(args.plot_folder, 'test.png')
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
