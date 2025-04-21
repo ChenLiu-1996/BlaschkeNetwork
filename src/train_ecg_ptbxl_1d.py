@@ -14,7 +14,7 @@ from nn_utils.scheduler import LinearWarmupCosineAnnealingLR
 from nn_utils.seed import seed_everything
 from nn_utils.log import log, count_parameters
 from dataset.ecg_datasets import get_ecg_dataset
-from analytical.analytical_decomposition import blaschke_decomposition
+# from analytical.analytical_decomposition import blaschke_decomposition
 
 
 def load_ptbxl(args):
@@ -36,6 +36,16 @@ def load_ptbxl(args):
     return train_loader, val_loader, test_loader, train_set.num_classes
 
 
+def binary_entropy(batched_coeffs: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    '''
+    Binary (self-)entropy.
+    Assuming range of input to be [0, 1].
+    '''
+    entropy = - batched_coeffs * torch.log(batched_coeffs + eps) + \
+              - (1 - batched_coeffs) * torch.log((1 - batched_coeffs) + eps)
+    return entropy
+
+
 def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes, device):
     train_loss_pred, train_loss_recon, train_loss_indicator, train_acc, train_auroc = 0, 0, 0, 0, 0
     y_true_arr, y_pred_arr = None, None
@@ -45,9 +55,10 @@ def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes, devic
         x = x.to(device)
         y_pred, residual_sqnorm, weighting_coeffs = model(x)
 
-        loss_recon = residual_sqnorm.mean()
-        loss_indicator = (weighting_coeffs * (1 - weighting_coeffs)).mean()
         loss_pred = loss_fn_pred(y_pred, y_true.to(device))
+        loss_recon = residual_sqnorm.mean()
+        # The gamma coefficients need to be almost 0 or 1. Hence minimizing the binary entropy.
+        loss_indicator = binary_entropy(weighting_coeffs).mean()
 
         # if args.direct_supervision:
         #     signal = x.detach().cpu().numpy()
@@ -102,7 +113,7 @@ def infer(loader, model, loss_fn_pred, num_classes, device):
 
         loss_pred = loss_fn_pred(y_pred, y_true.to(device))
         loss_recon = residual_sqnorm.mean()
-        loss_indicator = (weighting_coeffs * (1 - weighting_coeffs)).mean()
+        loss_indicator = binary_entropy(weighting_coeffs).mean()
 
         avg_loss_pred += loss_pred.item()
         avg_loss_recon += loss_recon.item()
@@ -152,7 +163,7 @@ def main(args):
         signal_len=5000,
         num_channels=12,
         layers=args.layers,
-        num_roots=args.roots,
+        num_roots=args.num_roots,
         detach_by_iter=args.detach_by_iter,
         patch_size=args.patch_size,
         out_classes=num_classes)
@@ -250,14 +261,14 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--layers', type=int, default=1)
-    parser.add_argument('--roots', type=int, default=16)
+    parser.add_argument('--num-roots', type=int, default=8)
     parser.add_argument('--detach-by-iter', action='store_true')                  # Independently optimize Blaschke decomposition per iteration.
     parser.add_argument('--direct-supervision', action='store_true')              # Use the analytical Blaschke coeffs to supervise training.
     parser.add_argument('--lr', help='Learning rate.', type=float, default=1e-2)
     parser.add_argument('--batch-size', type=int, default=256)
     parser.add_argument('--epoch', type=int, default=40)
     parser.add_argument('--loss-recon-coeff', type=float, default=1.0)
-    parser.add_argument('--loss-indicator-coeff', type=float, default=1e-2)       # Blaschke root selectors should be (almost) either 0 or 1.
+    parser.add_argument('--loss-indicator-coeff', type=float, default=0.1)        # Blaschke root selectors should be (almost) either 0 or 1.
     parser.add_argument('--num-workers', type=int, default=8)
     parser.add_argument('--random-seed', type=int, default=1)
     parser.add_argument('--subset', type=str, default='super_class')
@@ -269,7 +280,7 @@ if __name__ == '__main__':
     ROOT_DIR = '/'.join(os.path.realpath(__file__).split('/')[:-2])
     args.data_dir = args.data_dir.replace('$ROOT_DIR', ROOT_DIR)
 
-    curr_run_identifier = f'ECG_PTBXL/subset={args.subset}-{args.training_percentage}%_BN1d-L{args.layers}_R{args.roots}_DS-{args.direct_supervision}_detach-{args.detach_by_iter}_patch-{args.patch_size}_reconCoeff-{args.loss_recon_coeff}_indicatorCoeff-{args.loss_indicator_coeff}_lr-{args.lr}_epoch-{args.epoch}_seed-{args.random_seed}'
+    curr_run_identifier = f'ECG_PTBXL/subset={args.subset}-{args.training_percentage}%_BN1d-L{args.layers}_R{args.num_roots}_DS-{args.direct_supervision}_detach-{args.detach_by_iter}_patch-{args.patch_size}_reconCoeff-{args.loss_recon_coeff}_indicatorCoeff-{args.loss_indicator_coeff}_lr-{args.lr}_epoch-{args.epoch}_seed-{args.random_seed}'
     args.results_dir = os.path.join(ROOT_DIR, 'results', curr_run_identifier)
     args.log_path = os.path.join(args.results_dir, 'log.txt')
     args.model_save_path = os.path.join(args.results_dir, 'model.pty')

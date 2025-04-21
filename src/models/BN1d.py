@@ -140,8 +140,8 @@ class BlaschkeLayer1d(nn.Module):
         scale_imag = params[..., self.num_roots * 3 + 1 : self.num_roots * 3 + 2]
 
         self.alpha = alpha
-        self.beta = torch.exp(log_beta + self.eps)  # beta has to be positive.
-        self.gamma = torch.sigmoid(gamma)           # gamma has to be between 0 and 1.
+        self.beta =  torch.nn.functional.softplus(log_beta + self.eps) # beta has to be positive.
+        self.gamma = torch.sigmoid(gamma)                              # gamma has to be between 0 and 1.
         self.scale = scale_real + 1j * scale_imag
         return
 
@@ -257,7 +257,7 @@ class BlaschkeNetwork1d(nn.Module):
                  layers: int = 1,
                  detach_by_iter: bool = False,
                  out_classes: int = 10,
-                 num_roots: int = 16,
+                 num_roots: int = 8,
                  param_net_dim: int = 64,
                  param_net_depth: int = 2,
                  param_net_heads: int = 4,
