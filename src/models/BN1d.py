@@ -101,14 +101,14 @@ class BlaschkeLayer1d(nn.Module):
         return (f"BlaschkeLayer1d("
                 f"num_roots={self.num_roots})")
 
-    def activation(self, x: torch.Tensor) -> torch.Tensor:
+    def activation(self, signal: torch.Tensor) -> torch.Tensor:
         '''
         Custom activation function used in the BlaschkeLayer1d.
         '''
-        output = torch.arctan(x) + torch.pi / 2
+        output = torch.arctan(signal) + torch.pi / 2
         return output
 
-    def estimate_blaschke_parameters(self, x: torch.Tensor) -> torch.Tensor:
+    def estimate_blaschke_parameters(self, signal: torch.Tensor) -> torch.Tensor:
         '''
         Estimate the Blaschke parameters.
         Using gradient checkpointing to trade time for space.
@@ -116,27 +116,27 @@ class BlaschkeLayer1d(nn.Module):
 
         Args:
         -----
-            x : 3D torch.float
+            signal : 3D torch.float
                 inputs, shape [B, C, L] (batch size, channel, signal length)
         '''
 
-        B, C, L = x.shape                                              # [batch_size, num_channels, seq_len]
-        assert len(x.shape) == 3
-        x_real, x_imag = torch.real(x), torch.imag(x)                  # [batch_size, num_channels, seq_len]
-        x = torch.stack((x_real, x_imag), dim=2).float()               # [batch_size, num_channels, 2, seq_len]
-        x = rearrange(x, 'b c r l -> (b c) r l')                       # [batch_size * num_channels, 2, seq_len]
-        assert len(x.shape) == 3
+        B, C, L = signal.shape                                              # [batch_size, num_channels, seq_len]
+        assert len(signal.shape) == 3
+        x_real, x_imag = torch.real(signal), torch.imag(signal)             # [batch_size, num_channels, seq_len]
+        signal = torch.stack((x_real, x_imag), dim=2).float()               # [batch_size, num_channels, 2, seq_len]
+        signal = rearrange(signal, 'b c r l -> (b c) r l')                  # [batch_size * num_channels, 2, seq_len]
+        assert len(signal.shape) == 3
 
         if any_requires_grad(self.param_net):
-            params = checkpoint(self.param_net, x, self.dummy_tensor)  # [batch_size * num_channels, 4]
+            params = checkpoint(self.param_net, signal, self.dummy_tensor)  # [batch_size * num_channels, 4]
         else:
-            params = self.param_net(x, self.dummy_tensor)              # [batch_size * num_channels, 4]
-        params = rearrange(params, '(b c) p -> b c p', b=B, c=C)       # [batch_size, num_channels, 4]
+            params = self.param_net(signal, self.dummy_tensor)              # [batch_size * num_channels, 4]
+        params = rearrange(params, '(b c) p -> b c p', b=B, c=C)            # [batch_size, num_channels, 4]
 
         alpha = params[..., :self.num_roots]
         log_beta = params[..., self.num_roots : self.num_roots * 2]
         gamma = params[..., self.num_roots * 2 : self.num_roots * 3]
-        scale_real = params[..., self.num_roots * 3:self.num_roots * 3 + 1]
+        scale_real = params[..., self.num_roots * 3 : self.num_roots * 3 + 1]
         scale_imag = params[..., self.num_roots * 3 + 1 : self.num_roots * 3 + 2]
 
         self.alpha = alpha
@@ -145,27 +145,34 @@ class BlaschkeLayer1d(nn.Module):
         self.scale = scale_real + 1j * scale_imag
         return
 
-    def compute_blaschke_factor(self, x: torch.Tensor) -> torch.Tensor:
+    def compute_blaschke_factor(self, signal: torch.Tensor) -> torch.Tensor:
         '''
-        Compute the $B(x)$ for the input x.
+        Compute $B(x)$ for the input signal.
+
+        B(x) = exp(i \theta(x))
+        \theta(x) = \sum_j activation((x - \alpha_j) / \beta_j)
+        Note that here `x` is not the signal, but rather the time indices.
+        In the implementation, to avoid confusion, we use the symbol `t`.
 
         Args:
         -----
-            x : 3D torch.float
+            signal : 3D torch.float
                 inputs, shape [B, C, L] (batch size, channel, signal length)
 
         Returns:
         --------
-            y : 3D torch.float
+            blaschke_factor : 3D torch.float
                 outputs, shape [B, C, L] (batch size, channel, signal length)
         '''
 
-        x = x.unsqueeze(2)                               # [B, C, 1, L]
-        alpha = self.alpha.unsqueeze(-1)                 # [B, C, R, 1]
-        beta = self.beta.unsqueeze(-1)                   # [B, C, R, 1]
-        gamma = self.gamma.unsqueeze(-1)                 # [B, C, R, 1]
-        activated = self.activation((x - alpha) / beta)  # [B, C, R, L]
-        phase = (gamma * activated).sum(dim=2)           # sum over roots (R) → [B, C, L]
+        signal = signal.unsqueeze(2)                           # [B, C, 1, L]
+        t = rearrange(torch.linspace(0, 1, signal.shape[-1]),
+                      'l -> 1 1 1 l')                          # [1, 1, 1, L]
+        alpha = self.alpha.unsqueeze(-1)                       # [B, C, R, 1]
+        beta = self.beta.unsqueeze(-1)                         # [B, C, R, 1]
+        gamma = self.gamma.unsqueeze(-1)                       # [B, C, R, 1]
+        activated = self.activation((t - alpha) / beta)        # [B, C, R, L]
+        phase = (gamma * activated).sum(dim=2)                 # sum over roots (R) → [B, C, L]
 
         blaschke_factor = torch.exp(1j * phase)
         return blaschke_factor
@@ -175,31 +182,31 @@ class BlaschkeLayer1d(nn.Module):
         self.device = device
         return self
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, signal: torch.Tensor) -> torch.Tensor:
         '''
         Args:
         -----
-            x : 3D torch.float
+            signal : 3D torch.float
                 inputs, shape [B, C, L] (batch size, channel, signal length)
 
         Returns:
         --------
-            y : 3D torch.float
+            blaschke_factor : 3D torch.float
                 outputs, shape [B, C, L] (batch size, channel, signal length)
 
         Example
         -------
         >>> model = BlaschkeLayer1d(signal_len=100, signal_channel=10, num_roots=1)
-        >>> x = torch.normal(0, 1, size=(32, 10, 100))
-        >>> y = model(x)
+        >>> signal = torch.normal(0, 1, size=(32, 10, 100))
+        >>> blaschke_factor = model(signal)
         '''
 
         # [B, C, L]
-        assert len(x.shape) == 3
+        assert len(signal.shape) == 3
 
         # Compute the Blaschke product $B(x)$. [B, C, L]
-        self.estimate_blaschke_parameters(x)
-        blaschke_factor = self.compute_blaschke_factor(x)
+        self.estimate_blaschke_parameters(signal)
+        blaschke_factor = self.compute_blaschke_factor(signal)
         return blaschke_factor
 
 class Ignore2ndArg(nn.Module):
@@ -358,16 +365,19 @@ class BlaschkeNetwork1d(nn.Module):
             p.requires_grad = True
         return
 
-    def complexify(self, x: torch.Tensor, carrier_freq: float = 0) -> torch.Tensor:
+    def complexify(self, signal: torch.Tensor, carrier_freq: float = 0) -> torch.Tensor:
         '''
         Complexify the signal for Blaschke decomposition.
         '''
-        signal = x.cpu().detach().numpy()
+        device = signal.device
+        original_shape = signal.shape
+
+        signal = signal.cpu().detach().numpy()
         signal = rearrange(signal, 'b c l -> (b c) l')  # b: batch size, c: number of channels, l: signal length.
         # Hilbert transform after removing zero-order drift.
         signal = hilbert(signal - np.mean(signal, axis=1, keepdims=True))
         # Frequency shifting by carrier frequency.
-        time_indices = np.arange(x.shape[-1])
+        time_indices = np.arange(signal.shape[-1])
         signal = signal * np.exp(1j * 2 * np.pi * carrier_freq * time_indices)
         # Mitigate boundary effects. This is a common approach when performing Fourier analyses, spectral filtering, etc.
         signal_boundary_smoothed = np.concatenate((signal, np.fliplr(np.conj(signal))), axis=1)
@@ -375,18 +385,18 @@ class BlaschkeNetwork1d(nn.Module):
         mask_nonnegative_freq[:, mask_nonnegative_freq.shape[1] // 2:] = 0
         signal = np.fft.ifft(np.fft.fft(signal_boundary_smoothed) * mask_nonnegative_freq)
         signal = signal[:, :signal.shape[1] // 2]
-        signal = rearrange(signal, '(b c) l -> b c l', b=x.shape[0], c=x.shape[1])
+        signal = rearrange(signal, '(b c) l -> b c l', b=original_shape[0], c=original_shape[1])
 
         # Cast to torch Tensor.
-        signal = torch.from_numpy(signal).to(x.device)
+        signal = torch.from_numpy(signal).to(device)
         return signal
 
     @torch.no_grad()
-    def test_approximate(self, x: torch.Tensor) -> torch.Tensor:
+    def test_approximate(self, signal: torch.Tensor) -> torch.Tensor:
         # Input should be a [B, C, L] signal.
-        assert len(x.shape) == 3
+        assert len(signal.shape) == 3
         # Complexify the signal using hilbert transform.
-        signal_complex = self.complexify(x)
+        signal_complex = self.complexify(signal)
 
         blaschke_factors = []
         s_arr, B_prod_arr = None, None
@@ -417,11 +427,11 @@ class BlaschkeNetwork1d(nn.Module):
 
         return signal_complex, s_arr, B_prod_arr
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, signal: torch.Tensor) -> torch.Tensor:
         '''
         Args:
         -----
-            x : 3D torch.float
+            signal : 3D torch.float
                 inputs, shape [B, C, L] (batch size, channel, signal length)
 
         Returns:
@@ -435,10 +445,10 @@ class BlaschkeNetwork1d(nn.Module):
         '''
 
         # Input should be a [B, C, L] signal.
-        assert len(x.shape) == 3
+        assert len(signal.shape) == 3
 
         # Complexify the signal using hilbert transform.
-        signal_complex = self.complexify(x)
+        signal_complex = self.complexify(signal)
 
         blaschke_factors = []
         residual_signal, residual_sqnorm, weighting_coeffs = signal_complex, None, None
@@ -507,6 +517,6 @@ class BlaschkeNetwork1d(nn.Module):
 
 if __name__ == '__main__':
     model = BlaschkeNetwork1d(layers=1, signal_len=100, num_channels=10, patch_size=20)
-    x = torch.normal(0, 1, size=(32, 10, 100))
-    y, residual_sqnorm, blaschke_coeffs = model(x)
-    signal_complex, s_arr, B_prod_arr = model.test_approximate(x[:1, :1, :])
+    signal = torch.normal(0, 1, size=(32, 10, 100))
+    y, residual_sqnorm, blaschke_coeffs = model(signal)
+    signal_complex, s_arr, B_prod_arr = model.test_approximate(signal[:1, :1, :])

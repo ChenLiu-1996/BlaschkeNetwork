@@ -351,8 +351,8 @@ if __name__ == '__main__':
     parser.add_argument('--lr', help='Learning rate.', type=float, default=1e-2)
     parser.add_argument('--batch-size', type=int, default=256)
     parser.add_argument('--epoch', type=int, default=40)
-    parser.add_argument('--n-plot-per-epoch', type=int, default=2)
-    parser.add_argument('--loss-recon-coeff', type=float, default=1.0)
+    parser.add_argument('--n-plot-per-epoch', type=int, default=1)
+    parser.add_argument('--loss-recon-coeff', type=float, default=10)
     parser.add_argument('--loss-indicator-coeff', type=float, default=0.1)        # Blaschke root selectors should be (almost) either 0 or 1.
     parser.add_argument('--num-workers', type=int, default=8)
     parser.add_argument('--random-seed', type=int, default=1)
