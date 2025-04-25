@@ -119,7 +119,7 @@ def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes, devic
 
         optimizer.zero_grad()
         x = x.to(device)
-        y_pred, residual_sqnorm = model(x)
+        y_pred, residual_sqnorm, _ = model(x)
 
         loss_pred = loss_fn_pred(y_pred, y_true.to(device))
         loss_recon = residual_sqnorm.mean()

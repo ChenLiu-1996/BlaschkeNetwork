@@ -529,5 +529,5 @@ class BlaschkeNetwork1d(nn.Module):
 if __name__ == '__main__':
     model = BlaschkeNetwork1d(layers=3, num_roots=4, signal_len=100, num_channels=10, patch_size=20)
     signal = torch.normal(0, 1, size=(32, 10, 100))
-    y, residual_sqnorm, blaschke_coeffs = model(signal)
+    y, residual_sqnorm, active_roots_ratio = model(signal)
     signal_complex, s_arr, B_prod_arr = model.test_approximate(signal[:1, :1, :])
