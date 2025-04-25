@@ -245,6 +245,7 @@ if __name__ == '__main__':
             ax[total_order - 1, curr_order].legend(loc='lower left')
             ax[total_order - 1, curr_order].spines['top'].set_visible(False)
             ax[total_order - 1, curr_order].spines['right'].set_visible(False)
+            ax[total_order - 1, curr_order].set_ylim([-low_freq_component[1].real.mean() * 1.1, low_freq_component[1].real.mean() * 1.1])
 
     final = 0
     for curr_order in range(1, blaschke_order + 1):

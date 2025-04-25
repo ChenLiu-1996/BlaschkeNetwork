@@ -3,7 +3,6 @@ import torch.nn as nn
 from torch.utils.checkpoint import checkpoint
 import numpy as np
 from scipy.signal import hilbert
-from typing import List
 from einops import rearrange
 
 import os
@@ -108,7 +107,7 @@ class BlaschkeLayer1d(nn.Module):
         output = torch.arctan(signal) + torch.pi / 2
         return output
 
-    def estimate_blaschke_parameters(self, signal: torch.Tensor) -> torch.Tensor:
+    def estimate_blaschke_parameters(self, signal_complex: torch.Tensor) -> torch.Tensor:
         '''
         Estimate the Blaschke parameters.
         Using gradient checkpointing to trade time for space.
@@ -116,37 +115,41 @@ class BlaschkeLayer1d(nn.Module):
 
         Args:
         -----
-            signal : 3D torch.float
+            signal_complex : 3D torch.float
                 inputs, shape [B, C, L] (batch size, channel, signal length)
         '''
 
-        B, C, L = signal.shape                                              # [batch_size, num_channels, seq_len]
-        assert len(signal.shape) == 3
-        x_real, x_imag = torch.real(signal), torch.imag(signal)             # [batch_size, num_channels, seq_len]
-        signal = torch.stack((x_real, x_imag), dim=2).float()               # [batch_size, num_channels, 2, seq_len]
-        signal = rearrange(signal, 'b c r l -> (b c) r l')                  # [batch_size * num_channels, 2, seq_len]
+        B, C, L = signal_complex.shape                                        # [batch_size, num_channels, seq_len]
+        assert len(signal_complex.shape) == 3
+        x_real = torch.real(signal_complex)                                   # [batch_size, num_channels, seq_len]
+        x_imag = torch.imag(signal_complex)                                   # [batch_size, num_channels, seq_len]
+        signal = torch.stack((x_real, x_imag), dim=2).float()                 # [batch_size, num_channels, 2, seq_len]
+
+        signal = rearrange(signal, 'b c r l -> (b c) r l')                    # [batch_size * num_channels, 2, seq_len]
         assert len(signal.shape) == 3
 
         if any_requires_grad(self.param_net):
             params = checkpoint(self.param_net, signal, self.dummy_tensor,
-                                use_reentrant=False)                        # [batch_size * num_channels, 4]
+                                use_reentrant=False)                          # [batch_size * num_channels, num_roots * 3 + 1]
         else:
-            params = self.param_net(signal, self.dummy_tensor)              # [batch_size * num_channels, 4]
-        params = rearrange(params, '(b c) p -> b c p', b=B, c=C)            # [batch_size, num_channels, 4]
+            params = self.param_net(signal, self.dummy_tensor)                # [batch_size * num_channels, num_roots * 3 + 1]
+        params = rearrange(params, '(b c) p -> b c p', b=B, c=C)              # [batch_size, num_channels, num_roots * 3 + 1]
 
         alpha = params[..., :self.num_roots]
         log_beta = params[..., self.num_roots : self.num_roots * 2]
         gamma = params[..., self.num_roots * 2 : self.num_roots * 3]
-        scale_real = params[..., self.num_roots * 3 : self.num_roots * 3 + 1]
-        scale_imag = params[..., self.num_roots * 3 + 1 : self.num_roots * 3 + 2]
+        scale_phase = params[..., self.num_roots * 3 : self.num_roots * 3 + 1]
+        self.scale_phase = torch.tanh(scale_phase) * torch.pi                 # phase has to be between -pi and pi.
 
         self.alpha = alpha
-        self.beta =  torch.nn.functional.softplus(log_beta + self.eps) # beta has to be positive.
-        self.gamma = torch.sigmoid(gamma)                              # gamma has to be between 0 and 1.
-        self.scale = scale_real + 1j * scale_imag
+        self.beta =  torch.nn.functional.softplus(log_beta + self.eps)        # beta has to be positive.
+        # The following line is a smart technique. https://github.com/skmhrk1209/Single-Path-NAS-PyTorch/issues/4#issuecomment-511735329
+        self.gamma = (gamma > 0).float() + \
+            torch.sigmoid(gamma) - torch.sigmoid(gamma).detach()              # gamma has to be 0 or 1, and differentiable.
+        self.scale = torch.abs(signal_complex).mean(dim=-1, keepdims=True) * torch.exp(1j * self.scale_phase)
         return
 
-    def compute_blaschke_factor(self, signal: torch.Tensor) -> torch.Tensor:
+    def compute_blaschke_factor(self, signal_complex: torch.Tensor) -> torch.Tensor:
         '''
         Compute $B(x)$ for the input signal.
 
@@ -157,7 +160,7 @@ class BlaschkeLayer1d(nn.Module):
 
         Args:
         -----
-            signal : 3D torch.float
+            signal_complex : 3D torch.float
                 inputs, shape [B, C, L] (batch size, channel, signal length)
 
         Returns:
@@ -166,17 +169,16 @@ class BlaschkeLayer1d(nn.Module):
                 outputs, shape [B, C, L] (batch size, channel, signal length)
         '''
 
-        signal = signal.unsqueeze(2)                           # [B, C, 1, L]
-        t = rearrange(torch.linspace(0, 1, signal.shape[-1]),
-                      'l -> 1 1 1 l').to(signal.device)        # [1, 1, 1, L]
-        alpha = self.alpha.unsqueeze(-1)                       # [B, C, R, 1]
-        beta = self.beta.unsqueeze(-1)                         # [B, C, R, 1]
-        gamma = self.gamma.unsqueeze(-1)                       # [B, C, R, 1]
-        activated = self.activation((t - alpha) / beta)        # [B, C, R, L]
-        phase = (gamma * activated).sum(dim=2)                 # sum over roots (R) → [B, C, L]
+        signal_complex = signal_complex.unsqueeze(2)                          # [B, C, 1, L]
+        t = rearrange(torch.linspace(0, 1, signal_complex.shape[-1]),
+                      'l -> 1 1 1 l').to(signal_complex.device)               # [1, 1, 1, L]
+        alpha = self.alpha.unsqueeze(-1)                                      # [B, C, R, 1]
+        beta = self.beta.unsqueeze(-1)                                        # [B, C, R, 1]
+        gamma = self.gamma.unsqueeze(-1)                                      # [B, C, R, 1]
+        activated = self.activation((t - alpha) / beta)                       # [B, C, R, L]
+        phase = (gamma * activated).sum(dim=2)                                # sum over roots (R) → [B, C, L]
 
         blaschke_factor = torch.exp(1j * phase)
-
         return blaschke_factor
 
     def to(self, device: str):
@@ -184,11 +186,11 @@ class BlaschkeLayer1d(nn.Module):
         self.device = device
         return self
 
-    def forward(self, signal: torch.Tensor) -> torch.Tensor:
+    def forward(self, signal_complex: torch.Tensor) -> torch.Tensor:
         '''
         Args:
         -----
-            signal : 3D torch.float
+            signal_complex : 3D torch.float
                 inputs, shape [B, C, L] (batch size, channel, signal length)
 
         Returns:
@@ -204,12 +206,13 @@ class BlaschkeLayer1d(nn.Module):
         '''
 
         # [B, C, L]
-        assert len(signal.shape) == 3
+        assert len(signal_complex.shape) == 3
 
         # Compute the Blaschke product $B(x)$. [B, C, L]
-        self.estimate_blaschke_parameters(signal)
-        blaschke_factor = self.compute_blaschke_factor(signal)
+        self.estimate_blaschke_parameters(signal_complex)
+        blaschke_factor = self.compute_blaschke_factor(signal_complex)
         return blaschke_factor
+
 
 class Ignore2ndArg(nn.Module):
     '''
@@ -229,6 +232,7 @@ class Ignore2ndArg(nn.Module):
         assert dummy_arg is not None
         x = self.module(x)
         return x
+
 
 class BlaschkeNetwork1d(nn.Module):
     '''
@@ -285,8 +289,8 @@ class BlaschkeNetwork1d(nn.Module):
         self.detach_by_iter = detach_by_iter
         self.num_roots = num_roots
 
-        # 3 per root (alpha, log_beta, gamma), 2 per iteration: scale_real, scale_imaginary
-        num_classes = self.num_roots * 3 + 2
+        # 3 per root (alpha, log_beta, gamma), 1 per iteration: scale_phase
+        num_classes = self.num_roots * 3 + 1
         param_net = PatchTST(
             num_channels=2,  # (real, imaginary)
             num_classes=num_classes,
@@ -456,7 +460,7 @@ class BlaschkeNetwork1d(nn.Module):
         signal_complex = self.complexify(signal)
 
         blaschke_factors = []
-        residual_signal, residual_sqnorm, weighting_coeffs = signal_complex, None, None
+        residual_signal, residual_sqnorm, active_roots_ratio = signal_complex, None, None
         blaschke_coeffs = None
 
         for layer in self.encoder:
@@ -490,10 +494,13 @@ class BlaschkeNetwork1d(nn.Module):
             else:
                 residual_sqnorm = torch.cat((residual_sqnorm, curr_sqnorm), dim=0)
 
-            if weighting_coeffs is None:
-                weighting_coeffs = layer.gamma.unsqueeze(-1)
+            # Track the ratio of active roots per layer
+            active_roots = layer.gamma.sum().detach()
+            total_roots = layer.gamma.numel()
+            if active_roots_ratio is None:
+                active_roots_ratio = active_roots / total_roots
             else:
-                weighting_coeffs = torch.cat((weighting_coeffs, layer.gamma.unsqueeze(-1)), dim=-1)
+                active_roots_ratio = torch.cat((active_roots_ratio, active_roots / total_roots), dim=0)
 
             # NOTE: Currently, the model is trained end-to-end, where the Blaschke parameters
             # are used for downstream classification, and the gradient for classification can be backproped
@@ -501,8 +508,7 @@ class BlaschkeNetwork1d(nn.Module):
             curr_iter_coeffs = torch.cat((rearrange(layer.alpha, 'b c r -> b (c r)'),
                                           rearrange(layer.beta, 'b c r -> b (c r)'),
                                           rearrange(layer.gamma, 'b c r -> b (c r)'),
-                                          rearrange(torch.real(layer.scale), 'b c r -> b (c r)'),
-                                          rearrange(torch.imag(layer.scale), 'b c r -> b (c r)')),
+                                          rearrange(layer.scale_phase, 'b c r -> b (c r)')),
                                          dim=1)
             if blaschke_coeffs is None:
                 blaschke_coeffs = curr_iter_coeffs
@@ -511,7 +517,7 @@ class BlaschkeNetwork1d(nn.Module):
 
         y_pred = self.classifier(blaschke_coeffs)
 
-        return y_pred, residual_sqnorm, weighting_coeffs
+        return y_pred, residual_sqnorm, active_roots_ratio
 
 
     def to(self, device: str):

@@ -110,7 +110,7 @@ def plot_signal_approx(signal_complex, s_arr, B_prod_arr, mode: str, epoch_idx: 
 
 
 def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes, device, epoch_idx):
-    train_loss_pred, train_loss_recon, train_loss_indicator, train_acc, train_auroc = 0, 0, 0, 0, 0
+    train_loss_pred, train_loss_recon, train_acc, train_auroc = 0, 0, 0, 0
     y_true_arr, y_pred_arr = None, None
     plot_freq = max(len(train_loader) // args.n_plot_per_epoch, 1)
 
@@ -119,12 +119,10 @@ def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes, devic
 
         optimizer.zero_grad()
         x = x.to(device)
-        y_pred, residual_sqnorm, weighting_coeffs = model(x)
+        y_pred, residual_sqnorm = model(x)
 
         loss_pred = loss_fn_pred(y_pred, y_true.to(device))
         loss_recon = residual_sqnorm.mean()
-        # The gamma coefficients need to be almost 0 or 1. Hence minimizing the binary entropy.
-        loss_indicator = binary_entropy(weighting_coeffs).mean()
 
         # if args.direct_supervision:
         #     signal = x.detach().cpu().numpy()
@@ -132,13 +130,12 @@ def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes, devic
         #     assert np.all(np.diff(true_scale, axis=-1) == 0)
         #     true_scale = true_scale[:, :, :, 0]
 
-        loss = loss_pred + loss_recon * args.loss_recon_coeff + loss_indicator * args.loss_indicator_coeff
+        loss = loss_pred + loss_recon * args.loss_recon_coeff
         loss.backward()
         optimizer.step()
 
         train_loss_pred += loss_pred.item()
         train_loss_recon += loss_recon.item()
-        train_loss_indicator += loss_indicator.item()
 
         if y_true_arr is None:
             y_true_arr = y_true.detach().cpu().numpy()
@@ -154,7 +151,6 @@ def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes, devic
 
     train_loss_pred /= len(train_loader)
     train_loss_recon /= len(train_loader)
-    train_loss_indicator /= len(train_loader)
 
     acc_by_class, auroc_by_class = [], []
     for class_idx in range(num_classes):
@@ -170,28 +166,28 @@ def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes, devic
     train_acc = np.mean(acc_by_class)
     train_auroc = np.mean(auroc_by_class)
 
-    return train_loss_pred, train_loss_recon, train_loss_indicator, train_acc, train_auroc
+    return train_loss_pred, train_loss_recon, train_acc, train_auroc
 
 @torch.no_grad()
 def infer(loader, model, loss_fn_pred, num_classes, device, epoch_idx):
-    avg_loss_pred, avg_loss_recon, avg_loss_indicator, acc, auroc = 0, 0, 0, 0, 0
+    avg_loss_pred, avg_loss_recon, acc, auroc = 0, 0, 0, 0
     y_true_arr, y_pred_arr = None, None
     residual_by_iter = 0
+    active_root_ratio_by_iter = 0
     plot_freq = max(len(loader) // args.n_plot_per_epoch, 1)
 
     for batch_idx, (x, y_true) in enumerate(loader):
         should_plot = batch_idx % plot_freq == 0
         x = x.to(device)
-        y_pred, residual_sqnorm, weighting_coeffs = model(x)
+        y_pred, residual_sqnorm, active_roots_ratio = model(x)
 
         loss_pred = loss_fn_pred(y_pred, y_true.to(device))
         loss_recon = residual_sqnorm.mean()
-        loss_indicator = binary_entropy(weighting_coeffs).mean()
 
         avg_loss_pred += loss_pred.item()
         avg_loss_recon += loss_recon.item()
-        avg_loss_indicator += loss_indicator.item()
         residual_by_iter += residual_sqnorm.detach().cpu().numpy()
+        active_root_ratio_by_iter += active_roots_ratio.detach().cpu().numpy()
 
         if y_true_arr is None:
             y_true_arr = y_true.detach().cpu().numpy()
@@ -211,8 +207,8 @@ def infer(loader, model, loss_fn_pred, num_classes, device, epoch_idx):
 
     avg_loss_recon /= len(loader)
     avg_loss_pred /= len(loader)
-    avg_loss_indicator /= len(loader)
     residual_by_iter /= len(loader)
+    active_root_ratio_by_iter /= len(loader)
 
     acc_by_class, auroc_by_class = [], []
     for class_idx in range(num_classes):
@@ -227,7 +223,7 @@ def infer(loader, model, loss_fn_pred, num_classes, device, epoch_idx):
 
     acc = np.mean(acc_by_class)
     auroc = np.mean(auroc_by_class)
-    return avg_loss_pred, avg_loss_recon, avg_loss_indicator, residual_by_iter, acc, auroc
+    return avg_loss_pred, avg_loss_recon, residual_by_iter, active_root_ratio_by_iter, acc, auroc
 
 
 def main(args):
@@ -268,27 +264,25 @@ def main(args):
         log('Training begins.', filepath=args.log_path)
         best_auroc = 0
         train_acc_list, train_auroc_list, val_acc_list, val_auroc_list = [], [], [], []
-        train_loss_pred_list, train_loss_recon_list, train_loss_indicator_list = [], [], []
-        val_loss_pred_list, val_loss_recon_list, val_loss_indicator_list = [], [], []
+        train_loss_pred_list, train_loss_recon_list = [], []
+        val_loss_pred_list, val_loss_recon_list = [], []
         with tqdm(range(args.epoch)) as pbar:
             for epoch_idx, epoch in enumerate(pbar):
                 # Training.
                 model.train()
-                train_loss_pred, train_loss_recon, train_loss_indicator, train_acc, train_auroc = \
+                train_loss_pred, train_loss_recon, train_acc, train_auroc = \
                     train_epoch(train_loader=train_loader, model=model, optimizer=optimizer, loss_fn_pred=loss_fn_pred, num_classes=num_classes, device=device, epoch_idx=epoch_idx)
                 train_loss_pred_list.append(train_loss_pred)
                 train_loss_recon_list.append(train_loss_recon)
-                train_loss_indicator_list.append(train_loss_indicator)
                 train_acc_list.append(train_acc)
                 train_auroc_list.append(train_auroc)
 
                 # Validation.
                 model.eval()
-                val_loss_pred, val_loss_recon, val_loss_indicator, val_residual_by_iter, val_acc, val_auroc = \
+                val_loss_pred, val_loss_recon, val_residual_by_iter, val_active_root_ratio_by_iter, val_acc, val_auroc = \
                     infer(loader=val_loader, model=model, loss_fn_pred=loss_fn_pred, num_classes=num_classes, device=device, epoch_idx=epoch_idx)
                 val_loss_pred_list.append(val_loss_pred)
                 val_loss_recon_list.append(val_loss_recon)
-                val_loss_indicator_list.append(val_loss_indicator)
                 val_acc_list.append(val_acc)
                 val_auroc_list.append(val_auroc)
 
@@ -297,13 +291,13 @@ def main(args):
 
                 # Update progress bar.
                 pbar.set_postfix(
-                    tr_pred=f'{train_loss_pred:.3f}', tr_recon=f'{train_loss_recon:.5f}', tr_idc=f'{train_loss_indicator:.5f}',
-                    val_pred=f'{val_loss_pred:.3f}', val_recon=f'{val_loss_recon:.5f}', val_idc=f'{val_loss_indicator:.5f}',
+                    tr_pred=f'{train_loss_pred:.3f}', tr_recon=f'{train_loss_recon:.5f}',
+                    val_pred=f'{val_loss_pred:.3f}', val_recon=f'{val_loss_recon:.5f}',
                     tr_acc=f'{100 * train_acc:.2f}', val_acc=f'{100 * val_acc:.2f}',
                     tr_auroc=f'{100 * train_auroc:.2f}', val_auroc=f'{100 * val_auroc:.2f}',
                     lr=optimizer.param_groups[0]['lr'])
-                log_string = f'Epoch [{epoch + 1}/{args.epoch}]. Train pred loss = {train_loss_pred:.3f}, recon loss = {train_loss_recon:.5f}, indicator loss = {train_loss_indicator:.5f}, acc = {100 * train_acc:.3f}, auroc = {100 * train_auroc:.3f}.'
-                log_string += f'\nValidation pred loss = {val_loss_pred:.3f}, recon loss = {val_loss_recon:.5f}, indicator loss = {val_loss_indicator:.5f}, acc = {100 * val_acc:.3f}, auroc = {100 * val_auroc:.3f}, val_residual_by_iter = {val_residual_by_iter}.'
+                log_string = f'Epoch [{epoch + 1}/{args.epoch}]. Train pred loss = {train_loss_pred:.3f}, recon loss = {train_loss_recon:.5f}, acc = {100 * train_acc:.3f}, auroc = {100 * train_auroc:.3f}.'
+                log_string += f'\nValidation pred loss = {val_loss_pred:.3f}, recon loss = {val_loss_recon:.5f}, acc = {100 * val_acc:.3f}, auroc = {100 * val_auroc:.3f}, val_residual_by_iter = {val_residual_by_iter}, active roots ratio = {val_active_root_ratio_by_iter:.3f}.'
                 log(log_string, filepath=args.log_path, to_console=False)
 
                 # Save best model.
@@ -321,10 +315,8 @@ def main(args):
                     val_auroc_list=100*np.array(val_auroc_list).astype(np.float16),
                     train_loss_pred_list=np.array(train_loss_pred_list).astype(np.float16),
                     train_loss_recon_list=np.array(train_loss_recon_list).astype(np.float16),
-                    train_loss_indicator_list=np.array(train_loss_indicator_list).astype(np.float16),
                     val_loss_pred_list=np.array(val_loss_pred_list).astype(np.float16),
                     val_loss_recon_list=np.array(val_loss_recon_list).astype(np.float16),
-                    val_loss_indicator_list=np.array(val_loss_indicator_list).astype(np.float16),
                     val_residual_by_iter=np.array(val_residual_by_iter).astype(np.float16),
                 )
 
@@ -334,10 +326,10 @@ def main(args):
 
     log('Testing begins.', filepath=args.log_path)
     model.eval()
-    test_loss_pred, test_loss_recon, test_loss_indicator, test_residual_by_iter, test_acc, test_auroc = \
+    test_loss_pred, test_loss_recon, test_residual_by_iter, test_active_root_ratio_by_iter, test_acc, test_auroc = \
         infer(loader=test_loader, model=model, loss_fn_pred=loss_fn_pred, num_classes=num_classes, device=device, epoch_idx=None)
 
-    log_string = f'\nTest pred loss = {test_loss_pred:.3f}, recon loss = {test_loss_recon:.5f}, indicator loss = {test_loss_indicator:.5f}, acc = {100 * test_acc:.3f}, auroc = {100 * test_auroc:.3f}, test_residual_by_iter = {test_residual_by_iter}.'
+    log_string = f'\nTest pred loss = {test_loss_pred:.3f}, recon loss = {test_loss_recon:.5f}, acc = {100 * test_acc:.3f}, auroc = {100 * test_auroc:.3f}, test_residual_by_iter = {test_residual_by_iter}, active roots ratio = {test_active_root_ratio_by_iter:.3f}.'
     log(log_string, filepath=args.log_path, to_console=False)
 
 
@@ -352,7 +344,6 @@ if __name__ == '__main__':
     parser.add_argument('--epoch', type=int, default=40)
     parser.add_argument('--n-plot-per-epoch', type=int, default=1)
     parser.add_argument('--loss-recon-coeff', type=float, default=10)
-    parser.add_argument('--loss-indicator-coeff', type=float, default=0.1)        # Blaschke root selectors should be (almost) either 0 or 1.
     parser.add_argument('--num-workers', type=int, default=8)
     parser.add_argument('--random-seed', type=int, default=1)
     parser.add_argument('--subset', type=str, default='super_class')
@@ -364,7 +355,7 @@ if __name__ == '__main__':
     ROOT_DIR = '/'.join(os.path.realpath(__file__).split('/')[:-2])
     args.data_dir = args.data_dir.replace('$ROOT_DIR', ROOT_DIR)
 
-    curr_run_identifier = f'ECG_PTBXL/subset={args.subset}-{args.training_percentage}%_BN1d-L{args.layers}_R{args.num_roots}_DS-{args.direct_supervision}_detach-{args.detach_by_iter}_patch-{args.patch_size}_reconCoeff-{args.loss_recon_coeff}_indicatorCoeff-{args.loss_indicator_coeff}_lr-{args.lr}_epoch-{args.epoch}_seed-{args.random_seed}'
+    curr_run_identifier = f'ECG_PTBXL/subset={args.subset}-{args.training_percentage}%_BN1d-L{args.layers}_R{args.num_roots}_DS-{args.direct_supervision}_detach-{args.detach_by_iter}_patch-{args.patch_size}_reconCoeff-{args.loss_recon_coeff}_lr-{args.lr}_epoch-{args.epoch}_seed-{args.random_seed}'
     args.results_dir = os.path.join(ROOT_DIR, 'results', curr_run_identifier)
     args.log_path = os.path.join(args.results_dir, 'log.txt')
     args.model_save_path = os.path.join(args.results_dir, 'model.pty')
