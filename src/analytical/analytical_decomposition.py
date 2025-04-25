@@ -91,8 +91,12 @@ def complexify_signal(signal: np.ndarray, carrier_freq: float = 0) -> np.ndarray
     '''
     assert len(signal.shape) == 2
 
-    # Hilbert transform after removing zero-order drift.
-    signal = hilbert(signal - np.mean(signal, axis=1, keepdims=True))
+    # Remove zero-order drift.
+    signal = signal - np.mean(signal, axis=1, keepdims=True)
+    # Rescale to unit variance.
+    signal = signal / np.std(signal, axis=1, keepdims=True)
+    # Hilbert transform.
+    signal = hilbert(signal)
     # Frequency shifting by carrier frequency.
     time_indices = np.arange(signal.shape[-1])
     signal = signal * np.exp(1j * 2 * np.pi * carrier_freq * time_indices)
@@ -152,10 +156,10 @@ def blaschke_decomposition(signal: np.ndarray,
     else:
         raise ValueError(f'Currently only supporting 1D/2D/3D signals, but got shape {original_shape}.')
 
-    signal = complexify_signal(signal=signal, carrier_freq=carrier_freq)
+    signal_complex = complexify_signal(signal=signal, carrier_freq=carrier_freq)
 
     # First iteration of decomposition.
-    curr_high_freq_component, curr_low_freq_component = decompose_by_frequency(signal, fourier_poly_order, oversampling_rate, lowpass_order)
+    curr_high_freq_component, curr_low_freq_component = decompose_by_frequency(signal_complex, fourier_poly_order, oversampling_rate, lowpass_order)
     curr_blaschke_factor, curr_G = decompose_blaschke_factors(curr_high_freq_component, fourier_poly_order, oversampling_rate, eps)
     low_freq_component = curr_low_freq_component[None, ...]
     blaschke_factor = curr_blaschke_factor[None, ...]
@@ -170,7 +174,7 @@ def blaschke_decomposition(signal: np.ndarray,
         blaschke_factor = np.concatenate((blaschke_factor, curr_blaschke_factor[None, ...]), axis=0)
         blaschke_product = np.concatenate((blaschke_product, blaschke_product[-1, :, :][None, ...] * curr_blaschke_factor[None, ...]), axis=0)
 
-    time_indices = np.arange(signal.shape[-1])
+    time_indices = np.arange(signal_complex.shape[-1])
     blaschke_product = blaschke_product * np.tile(np.exp(-1j * 2 * np.pi * carrier_freq * time_indices), (num_blaschke_iters, batch_size_times_num_channel, 1))
 
     # NOTE: Now, the shapes of `low_freq_component`, `blaschke_factor`, `blaschke_product` are the same:
@@ -187,7 +191,7 @@ def blaschke_decomposition(signal: np.ndarray,
         blaschke_factor = rearrange(blaschke_factor, 'i (b c) l -> i b c l', b=original_shape[0], c=original_shape[1])
         blaschke_product = rearrange(blaschke_product, 'i (b c) l -> i b c l', b=original_shape[0], c=original_shape[1])
 
-    return low_freq_component, blaschke_factor, blaschke_product
+    return low_freq_component, blaschke_factor, blaschke_product, signal_complex
 
 def display_blaschke_product(order: int):
     '''
@@ -220,7 +224,7 @@ if __name__ == '__main__':
     carrier_freq = 0                         # Seems unnecessary.
 
     # Blaschke decomposition.
-    low_freq_component, _, blaschke_product = blaschke_decomposition(
+    low_freq_component, _, blaschke_product, signal_complex = blaschke_decomposition(
         signal=signal_arr,
         num_blaschke_iters=num_blaschke_iters,
         fourier_poly_order=signal_arr.shape[-1],
@@ -229,7 +233,7 @@ if __name__ == '__main__':
         carrier_freq=carrier_freq)
 
     fig, ax = plt.subplots(blaschke_order, blaschke_order + 2, figsize = (26, 16))
-    signal_arr = signal_arr.reshape(-1)  # For plotting purposes.
+    signal_arr = signal_complex.real.reshape(-1)  # For plotting purposes.
     for total_order in range(blaschke_order):
         ax[total_order, 0].plot(time_arr, signal_arr, label = 'original signal', color='firebrick', alpha=0.8)
         ax[total_order, 0].legend(loc='lower left')

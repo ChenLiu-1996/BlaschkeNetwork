@@ -167,7 +167,7 @@ class BlaschkeLayer1d(nn.Module):
 
         signal = signal.unsqueeze(2)                           # [B, C, 1, L]
         t = rearrange(torch.linspace(0, 1, signal.shape[-1]),
-                      'l -> 1 1 1 l')                          # [1, 1, 1, L]
+                      'l -> 1 1 1 l').to(signal.device)        # [1, 1, 1, L]
         alpha = self.alpha.unsqueeze(-1)                       # [B, C, R, 1]
         beta = self.beta.unsqueeze(-1)                         # [B, C, R, 1]
         gamma = self.gamma.unsqueeze(-1)                       # [B, C, R, 1]
@@ -374,8 +374,12 @@ class BlaschkeNetwork1d(nn.Module):
 
         signal = signal.cpu().detach().numpy()
         signal = rearrange(signal, 'b c l -> (b c) l')  # b: batch size, c: number of channels, l: signal length.
-        # Hilbert transform after removing zero-order drift.
-        signal = hilbert(signal - np.mean(signal, axis=1, keepdims=True))
+        # Remove zero-order drift.
+        signal = signal - np.mean(signal, axis=1, keepdims=True)
+        # Rescale to unit variance.
+        signal = signal / np.std(signal, axis=1, keepdims=True)
+        # Hilbert transform.
+        signal = hilbert(signal)
         # Frequency shifting by carrier frequency.
         time_indices = np.arange(signal.shape[-1])
         signal = signal * np.exp(1j * 2 * np.pi * carrier_freq * time_indices)
@@ -516,7 +520,7 @@ class BlaschkeNetwork1d(nn.Module):
 
 
 if __name__ == '__main__':
-    model = BlaschkeNetwork1d(layers=1, signal_len=100, num_channels=10, patch_size=20)
+    model = BlaschkeNetwork1d(layers=3, num_roots=4, signal_len=100, num_channels=10, patch_size=20)
     signal = torch.normal(0, 1, size=(32, 10, 100))
     y, residual_sqnorm, blaschke_coeffs = model(signal)
     signal_complex, s_arr, B_prod_arr = model.test_approximate(signal[:1, :1, :])

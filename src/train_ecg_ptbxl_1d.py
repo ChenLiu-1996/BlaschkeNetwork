@@ -4,7 +4,6 @@ import os
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from sklearn.metrics import roc_auc_score, accuracy_score, precision_recall_curve
@@ -260,7 +259,7 @@ def main(args):
     loss_fn_pred = nn.BCEWithLogitsLoss()
 
     if not os.path.isfile(args.model_save_path):
-        optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
         scheduler = LinearWarmupCosineAnnealingLR(optimizer=optimizer,
                                                 warmup_start_lr=args.lr * 1e-3,
                                                 warmup_epochs=min(20, args.epoch//5),
