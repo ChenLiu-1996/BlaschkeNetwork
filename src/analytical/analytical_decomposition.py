@@ -93,8 +93,6 @@ def complexify_signal(signal: np.ndarray, carrier_freq: float = 0) -> np.ndarray
 
     # Remove zero-order drift.
     signal = signal - np.mean(signal, axis=1, keepdims=True)
-    # Rescale to unit variance.
-    signal = signal / np.std(signal, axis=1, keepdims=True)
     # Hilbert transform.
     signal = hilbert(signal)
     # Frequency shifting by carrier frequency.

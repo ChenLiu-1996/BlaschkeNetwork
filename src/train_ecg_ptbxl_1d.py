@@ -348,7 +348,7 @@ if __name__ == '__main__':
     parser.add_argument('--detach-by-iter', action='store_true')                  # Independently optimize Blaschke decomposition per iteration.
     parser.add_argument('--direct-supervision', action='store_true')              # Use the analytical Blaschke coeffs to supervise training.
     parser.add_argument('--lr', help='Learning rate.', type=float, default=1e-2)
-    parser.add_argument('--batch-size', type=int, default=256)
+    parser.add_argument('--batch-size', type=int, default=128)
     parser.add_argument('--epoch', type=int, default=40)
     parser.add_argument('--n-plot-per-epoch', type=int, default=1)
     parser.add_argument('--loss-recon-coeff', type=float, default=10)

@@ -128,7 +128,8 @@ class BlaschkeLayer1d(nn.Module):
         assert len(signal.shape) == 3
 
         if any_requires_grad(self.param_net):
-            params = checkpoint(self.param_net, signal, self.dummy_tensor)  # [batch_size * num_channels, 4]
+            params = checkpoint(self.param_net, signal, self.dummy_tensor,
+                                use_reentrant=False)                        # [batch_size * num_channels, 4]
         else:
             params = self.param_net(signal, self.dummy_tensor)              # [batch_size * num_channels, 4]
         params = rearrange(params, '(b c) p -> b c p', b=B, c=C)            # [batch_size, num_channels, 4]
@@ -175,6 +176,7 @@ class BlaschkeLayer1d(nn.Module):
         phase = (gamma * activated).sum(dim=2)                 # sum over roots (R) → [B, C, L]
 
         blaschke_factor = torch.exp(1j * phase)
+
         return blaschke_factor
 
     def to(self, device: str):
@@ -268,7 +270,7 @@ class BlaschkeNetwork1d(nn.Module):
                  param_net_dim: int = 64,
                  param_net_depth: int = 2,
                  param_net_heads: int = 4,
-                 param_net_mlp_dim: int = 256,
+                 param_net_mlp_dim: int = 64,
                  eps: float = 1e-6,
                  device: str = 'cpu',
                  seed: int = 1) -> None:
@@ -322,10 +324,10 @@ class BlaschkeNetwork1d(nn.Module):
         # This is technically not a linear probing, but rather a two-stage training.
         self.classifier = nn.Sequential(
             nn.BatchNorm1d(num_features),
-            nn.Linear(num_features, num_features),
-            nn.SiLU(),
-            nn.BatchNorm1d(num_features),
             nn.Linear(num_features, self.out_classes),
+            nn.SiLU(),
+            nn.BatchNorm1d(self.out_classes),
+            nn.Linear(self.out_classes, self.out_classes),
         )
 
         # Initialize weights
@@ -376,8 +378,6 @@ class BlaschkeNetwork1d(nn.Module):
         signal = rearrange(signal, 'b c l -> (b c) l')  # b: batch size, c: number of channels, l: signal length.
         # Remove zero-order drift.
         signal = signal - np.mean(signal, axis=1, keepdims=True)
-        # Rescale to unit variance.
-        signal = signal / np.std(signal, axis=1, keepdims=True)
         # Hilbert transform.
         signal = hilbert(signal)
         # Frequency shifting by carrier frequency.
@@ -399,6 +399,7 @@ class BlaschkeNetwork1d(nn.Module):
     def test_approximate(self, signal: torch.Tensor) -> torch.Tensor:
         # Input should be a [B, C, L] signal.
         assert len(signal.shape) == 3
+
         # Complexify the signal using hilbert transform.
         signal_complex = self.complexify(signal)
 

@@ -17,7 +17,7 @@ We developed the codebase in a miniconda environment.
 Tested on Python 3.9.13 + PyTorch 1.12.1.
 How we created the conda environment:
 ```
-conda create --name bnet pytorch==1.12.1 torchvision==0.13.1 torchaudio==0.12.1 cudatoolkit=11.3 -c pytorch -y
+conda create --name bnet pytorch==2.1.0 torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia -c anaconda -c conda-forge -y
 conda activate bnet
 conda install -c anaconda scikit-image pillow matplotlib seaborn tqdm -y
 python -m pip install tinyimagenet
