@@ -346,7 +346,7 @@ if __name__ == '__main__':
     parser.add_argument('--batch-size', type=int, default=128)
     parser.add_argument('--epoch', type=int, default=40)
     parser.add_argument('--n-plot-per-epoch', type=int, default=1)
-    parser.add_argument('--loss-recon-coeff', type=float, default=50)
+    parser.add_argument('--loss-recon-coeff', type=float, default=25)
     parser.add_argument('--num-workers', type=int, default=8)
     parser.add_argument('--random-seed', type=int, default=1)
     parser.add_argument('--subset', type=str, default='super_class')
