@@ -489,7 +489,7 @@ class BlaschkeNetwork1d(nn.Module):
                 residual_signal = residual_signal - curr_signal_approx
 
             # This helps sanity checking the residual norms at each iteration.
-            curr_sqnorm = torch.real(residual_signal).pow(2).mean().unsqueeze(0)
+            curr_sqnorm = torch.abs(residual_signal).pow(2).mean().unsqueeze(0)
             if residual_sqnorm is None:
                 residual_sqnorm = curr_sqnorm
             else:
