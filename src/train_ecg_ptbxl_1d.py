@@ -119,7 +119,7 @@ def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes, devic
 
         optimizer.zero_grad()
         x = x.to(device)
-        y_pred, residual_sqnorm, _ = model(x)
+        y_pred, residual_sqnorm, _, _ = model(x)
 
         loss_pred = loss_fn_pred(y_pred, y_true.to(device))
         loss_recon = residual_sqnorm.mean()
@@ -172,14 +172,13 @@ def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes, devic
 def infer(loader, model, loss_fn_pred, num_classes, device, epoch_idx):
     avg_loss_pred, avg_loss_recon, acc, auroc = 0, 0, 0, 0
     y_true_arr, y_pred_arr = None, None
-    residual_by_iter = 0
-    active_root_ratio_by_iter = 0
+    residual_by_iter, mean_scale_by_iter, active_root_ratio_by_iter = 0, 0, 0
     plot_freq = max(len(loader) // args.n_plot_per_epoch, 1)
 
     for batch_idx, (x, y_true) in enumerate(loader):
         should_plot = batch_idx % plot_freq == 0
         x = x.to(device)
-        y_pred, residual_sqnorm, active_roots_ratio = model(x)
+        y_pred, residual_sqnorm, mean_scale, active_roots_ratio = model(x)
 
         loss_pred = loss_fn_pred(y_pred, y_true.to(device))
         loss_recon = residual_sqnorm.mean()
@@ -187,6 +186,7 @@ def infer(loader, model, loss_fn_pred, num_classes, device, epoch_idx):
         avg_loss_pred += loss_pred.item()
         avg_loss_recon += loss_recon.item()
         residual_by_iter += residual_sqnorm.detach().cpu().numpy()
+        mean_scale_by_iter += mean_scale.detach().cpu().numpy()
         active_root_ratio_by_iter += active_roots_ratio.detach().cpu().numpy()
 
         if y_true_arr is None:
@@ -208,6 +208,7 @@ def infer(loader, model, loss_fn_pred, num_classes, device, epoch_idx):
     avg_loss_recon /= len(loader)
     avg_loss_pred /= len(loader)
     residual_by_iter /= len(loader)
+    mean_scale_by_iter /= len(loader)
     active_root_ratio_by_iter /= len(loader)
 
     acc_by_class, auroc_by_class = [], []
@@ -223,7 +224,7 @@ def infer(loader, model, loss_fn_pred, num_classes, device, epoch_idx):
 
     acc = np.mean(acc_by_class)
     auroc = np.mean(auroc_by_class)
-    return avg_loss_pred, avg_loss_recon, residual_by_iter, active_root_ratio_by_iter, acc, auroc
+    return avg_loss_pred, avg_loss_recon, acc, auroc, residual_by_iter, mean_scale_by_iter, active_root_ratio_by_iter
 
 
 def main(args):
@@ -279,7 +280,7 @@ def main(args):
 
                 # Validation.
                 model.eval()
-                val_loss_pred, val_loss_recon, val_residual_by_iter, val_active_root_ratio_by_iter, val_acc, val_auroc = \
+                val_loss_pred, val_loss_recon, val_acc, val_auroc, val_residual_by_iter, val_mean_scale_by_iter, val_active_root_ratio_by_iter = \
                     infer(loader=val_loader, model=model, loss_fn_pred=loss_fn_pred, num_classes=num_classes, device=device, epoch_idx=epoch_idx)
                 val_loss_pred_list.append(val_loss_pred)
                 val_loss_recon_list.append(val_loss_recon)
@@ -297,7 +298,7 @@ def main(args):
                     tr_auroc=f'{100 * train_auroc:.2f}', val_auroc=f'{100 * val_auroc:.2f}',
                     lr=optimizer.param_groups[0]['lr'])
                 log_string = f'Epoch [{epoch + 1}/{args.epoch}]. Train pred loss = {train_loss_pred:.3f}, recon loss = {train_loss_recon:.5f}, acc = {100 * train_acc:.3f}, auroc = {100 * train_auroc:.3f}.'
-                log_string += f'\nValidation pred loss = {val_loss_pred:.3f}, recon loss = {val_loss_recon:.5f}, acc = {100 * val_acc:.3f}, auroc = {100 * val_auroc:.3f}, val_residual_by_iter = {val_residual_by_iter}, active roots ratio = {val_active_root_ratio_by_iter:.3f}.'
+                log_string += f'\nValidation pred loss = {val_loss_pred:.3f}, recon loss = {val_loss_recon:.5f}, acc = {100 * val_acc:.3f}, auroc = {100 * val_auroc:.3f}, val_residual_by_iter = {val_residual_by_iter}, mean scale = {val_mean_scale_by_iter}, active roots ratio = {val_active_root_ratio_by_iter}.'
                 log(log_string, filepath=args.log_path, to_console=False)
 
                 # Save best model.
@@ -318,6 +319,8 @@ def main(args):
                     val_loss_pred_list=np.array(val_loss_pred_list).astype(np.float16),
                     val_loss_recon_list=np.array(val_loss_recon_list).astype(np.float16),
                     val_residual_by_iter=np.array(val_residual_by_iter).astype(np.float16),
+                    val_mean_scale_by_iter=np.array(val_mean_scale_by_iter).astype(np.float16),
+                    val_active_root_ratio_by_iter=np.array(val_active_root_ratio_by_iter).astype(np.float16),
                 )
 
     # Testing.
@@ -326,10 +329,10 @@ def main(args):
 
     log('Testing begins.', filepath=args.log_path)
     model.eval()
-    test_loss_pred, test_loss_recon, test_residual_by_iter, test_active_root_ratio_by_iter, test_acc, test_auroc = \
+    test_loss_pred, test_loss_recon, test_acc, test_auroc, test_residual_by_iter, test_mean_scale_by_iter, test_active_root_ratio_by_iter = \
         infer(loader=test_loader, model=model, loss_fn_pred=loss_fn_pred, num_classes=num_classes, device=device, epoch_idx=None)
 
-    log_string = f'\nTest pred loss = {test_loss_pred:.3f}, recon loss = {test_loss_recon:.5f}, acc = {100 * test_acc:.3f}, auroc = {100 * test_auroc:.3f}, test_residual_by_iter = {test_residual_by_iter}, active roots ratio = {test_active_root_ratio_by_iter:.3f}.'
+    log_string = f'\nTest pred loss = {test_loss_pred:.3f}, recon loss = {test_loss_recon:.5f}, acc = {100 * test_acc:.3f}, auroc = {100 * test_auroc:.3f}, test_residual_by_iter = {test_residual_by_iter}, mean scale = {test_mean_scale_by_iter}, active roots ratio = {test_active_root_ratio_by_iter}.'
     log(log_string, filepath=args.log_path, to_console=False)
 
 
@@ -343,7 +346,7 @@ if __name__ == '__main__':
     parser.add_argument('--batch-size', type=int, default=128)
     parser.add_argument('--epoch', type=int, default=40)
     parser.add_argument('--n-plot-per-epoch', type=int, default=1)
-    parser.add_argument('--loss-recon-coeff', type=float, default=10)
+    parser.add_argument('--loss-recon-coeff', type=float, default=50)
     parser.add_argument('--num-workers', type=int, default=8)
     parser.add_argument('--random-seed', type=int, default=1)
     parser.add_argument('--subset', type=str, default='super_class')
