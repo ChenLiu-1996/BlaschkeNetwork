@@ -253,6 +253,7 @@ if __name__ == '__main__':
         ax[curr_order - 1, blaschke_order + 1].plot(time_arr, signal_arr, label = 'original signal', color='firebrick', alpha=0.8)
         ax[curr_order - 1, blaschke_order + 1].plot(time_arr, final, label = 'reconstruction', color='skyblue', alpha=0.9)
         ax[curr_order - 1, blaschke_order + 1].plot(time_arr, final - signal_arr, label = 'residual', color='gray', alpha=1.0)
+        ax[curr_order - 1, blaschke_order + 1].set_title(f'Reconstruction Error: {np.power(np.abs(final - signal_arr), 2).mean():.4f}')
         ax[curr_order - 1, blaschke_order + 1].legend(loc='lower left')
         ax[curr_order - 1, blaschke_order + 1].spines['top'].set_visible(False)
         ax[curr_order - 1, blaschke_order + 1].spines['right'].set_visible(False)
