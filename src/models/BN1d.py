@@ -135,19 +135,30 @@ class BlaschkeLayer1d(nn.Module):
             params = self.param_net(signal, self.dummy_tensor)                # [batch_size * num_channels, num_roots * 3 + 1]
         params = rearrange(params, '(b c) p -> b c p', b=B, c=C)              # [batch_size, num_channels, num_roots * 3 + 1]
 
-        alpha = params[..., :self.num_roots]
-        log_beta = params[..., self.num_roots : self.num_roots * 2]
-        gamma = params[..., self.num_roots * 2 : self.num_roots * 3]
-        scale_real = params[..., self.num_roots * 3 : self.num_roots * 3 + 1]
-        scale_imag = params[..., self.num_roots * 3 + 1 : self.num_roots * 3 + 2]
-
-        self.alpha = alpha
-        self.beta =  torch.nn.functional.softplus(log_beta + self.eps)        # beta has to be positive.
-        # The following line is a smart technique. https://github.com/skmhrk1209/Single-Path-NAS-PyTorch/issues/4#issuecomment-511735329
-        self.gamma = (gamma > 0).float() + \
-            torch.sigmoid(gamma) - torch.sigmoid(gamma).detach()              # gamma has to be 0 or 1, and differentiable.
-        self.scale = scale_real + 1j * scale_imag
+        self.alphas = params[..., :self.num_roots]
+        self.log_betas = params[..., self.num_roots : self.num_roots * 2]
+        self.logit_gammas = params[..., self.num_roots * 2 : self.num_roots * 3]
+        self.scale_real = params[..., self.num_roots * 3 : self.num_roots * 3 + 1]
+        self.scale_imag = params[..., self.num_roots * 3 + 1 : self.num_roots * 3 + 2]
         return
+
+    @property
+    def betas(self):
+        '''
+        betas have to be positive.
+        '''
+        return torch.exp(self.log_betas)
+
+    @property
+    def gammas(self):
+        '''
+        gammas have to be between 0 and 1.
+        '''
+        return torch.sigmoid(self.logit_gammas)
+
+    @property
+    def scale(self):
+        return self.scale_real + 1j * self.scale_imag
 
     def compute_blaschke_factor(self, signal_complex: torch.Tensor) -> torch.Tensor:
         '''
@@ -170,13 +181,14 @@ class BlaschkeLayer1d(nn.Module):
         '''
 
         signal_complex = signal_complex.unsqueeze(2)                          # [B, C, 1, L]
-        t = rearrange(torch.linspace(0, 1, signal_complex.shape[-1]),
+        t = rearrange(torch.linspace(-1, 1, signal_complex.shape[-1]),
                       'l -> 1 1 1 l').to(signal_complex.device)               # [1, 1, 1, L]
-        alpha = self.alpha.unsqueeze(-1)                                      # [B, C, R, 1]
-        beta = self.beta.unsqueeze(-1)                                        # [B, C, R, 1]
-        gamma = self.gamma.unsqueeze(-1)                                      # [B, C, R, 1]
-        activated = self.activation((t - alpha) / beta)                       # [B, C, R, L]
-        phase = (gamma * activated).sum(dim=2)                                # sum over roots (R) → [B, C, L]
+        alphas = self.alphas.unsqueeze(-1)                                    # [B, C, R, 1]
+        betas = self.betas.unsqueeze(-1)                                      # [B, C, R, 1]
+        gammas = self.gammas.unsqueeze(-1)                                    # [B, C, R, 1]
+
+        activated = self.activation((t - alphas) / betas)                     # [B, C, R, L]
+        phase = (gammas * activated).sum(dim=2)                               # sum over roots (R) → [B, C, L]
 
         blaschke_factor = torch.exp(1j * phase)
         return blaschke_factor
@@ -428,11 +440,11 @@ class BlaschkeNetwork1d(nn.Module):
             residual_signal = residual_signal - curr_signal_approx
 
             if s_arr is None:
-                s_arr = layer.scale.unsqueeze(-1)
-                B_prod_arr = blaschke_product.unsqueeze(-1)
+                s_arr = layer.scale.cpu().unsqueeze(-1)
+                B_prod_arr = blaschke_product.cpu().unsqueeze(-1)
             else:
-                s_arr = torch.cat((s_arr, layer.scale.unsqueeze(-1)), dim=-1)
-                B_prod_arr = torch.cat((B_prod_arr, blaschke_product.unsqueeze(-1)), dim=-1)
+                s_arr = torch.cat((s_arr, layer.scale.cpu().unsqueeze(-1)), dim=-1)
+                B_prod_arr = torch.cat((B_prod_arr, blaschke_product.cpu().unsqueeze(-1)), dim=-1)
 
         return signal_complex, s_arr, B_prod_arr
 
@@ -460,7 +472,7 @@ class BlaschkeNetwork1d(nn.Module):
         signal_complex = self.complexify(signal)
 
         blaschke_factors = []
-        residual_signal, residual_sqnorm = signal_complex, None
+        residual_signal, residual_sqnorm, gamma_deviation = signal_complex, None, None
         mean_scale, active_roots_ratio = None, None
         blaschke_coeffs = None
 
@@ -490,20 +502,23 @@ class BlaschkeNetwork1d(nn.Module):
 
             # This helps sanity checking the residual norms at each iteration.
             curr_sqnorm = torch.abs(residual_signal).pow(2).mean().unsqueeze(0)
+            curr_deviation = layer.gammas * (1 - layer.gammas)
             if residual_sqnorm is None:
                 residual_sqnorm = curr_sqnorm
+                gamma_deviation = curr_deviation
             else:
                 residual_sqnorm = torch.cat((residual_sqnorm, curr_sqnorm), dim=0)
+                gamma_deviation = torch.cat((gamma_deviation, curr_deviation), dim=0)
 
             # Track the mean scale per layer.
             if mean_scale is None:
-                mean_scale = layer.scale.real.mean().detach().unsqueeze(0)
+                mean_scale = layer.scale.detach().cpu().mean().unsqueeze(0)
             else:
-                mean_scale = torch.cat((mean_scale, layer.scale.real.mean().detach().unsqueeze(0)), dim=0)
+                mean_scale = torch.cat((mean_scale, layer.scale.detach().cpu().mean().unsqueeze(0)), dim=0)
 
             # Track the ratio of active roots per layer.
-            active_roots = layer.gamma.sum().detach()
-            total_roots = layer.gamma.numel()
+            active_roots = (layer.logit_gammas > 0).sum().cpu().detach()
+            total_roots = layer.logit_gammas.numel()
             if active_roots_ratio is None:
                 active_roots_ratio = (active_roots / total_roots).unsqueeze(0)
             else:
@@ -512,12 +527,13 @@ class BlaschkeNetwork1d(nn.Module):
             # NOTE: Currently, the model is trained end-to-end, where the Blaschke parameters
             # are used for downstream classification, and the gradient for classification can be backproped
             # through the Blaschke networks (param_net).
-            curr_iter_coeffs = torch.cat((rearrange(layer.alpha, 'b c r -> b (c r)'),
-                                          rearrange(layer.beta, 'b c r -> b (c r)'),
-                                          rearrange(layer.gamma, 'b c r -> b (c r)'),
-                                          rearrange(layer.scale.real, 'b c r -> b (c r)'),
-                                          rearrange(layer.scale.imag, 'b c r -> b (c r)')
+            curr_iter_coeffs = torch.cat((rearrange(layer.alphas, 'b c r -> b (c r)'),
+                                          rearrange(layer.betas, 'b c r -> b (c r)'),
+                                          rearrange(layer.gammas, 'b c r -> b (c r)'),
+                                          rearrange(layer.scale_real, 'b c r -> b (c r)'),
+                                          rearrange(layer.scale_imag, 'b c r -> b (c r)')
                                           ), dim=1)
+
             if blaschke_coeffs is None:
                 blaschke_coeffs = curr_iter_coeffs
             else:
@@ -525,7 +541,7 @@ class BlaschkeNetwork1d(nn.Module):
 
         y_pred = self.classifier(blaschke_coeffs)
 
-        return y_pred, residual_sqnorm, mean_scale, active_roots_ratio
+        return y_pred, residual_sqnorm, gamma_deviation, mean_scale.numpy(), active_roots_ratio.numpy()
 
 
     def to(self, device: str):

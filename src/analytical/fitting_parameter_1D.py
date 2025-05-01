@@ -83,7 +83,7 @@ class BlaschkeParams(torch.nn.Module):
         # NOTE: Assuming B = 1, C = 1.
 
         signal_complex = signal_complex.unsqueeze(2)                           # [B, C, 1, L]
-        t = rearrange(torch.linspace(0, 1, signal_complex.shape[-1]),
+        t = rearrange(torch.linspace(-1, 1, signal_complex.shape[-1]),
                       'l -> 1 1 1 l').to(signal_complex.device)                # [1, 1, 1, L]
         alphas = rearrange(self.alphas, 'r -> 1 1 r 1')                        # [B, C, R, 1]
         betas = rearrange(self.betas, 'r -> 1 1 r 1')                          # [B, C, R, 1]
@@ -93,7 +93,6 @@ class BlaschkeParams(torch.nn.Module):
         phase = (gammas * activated).sum(dim=2)                                # sum over roots (R) → [B, C, L]
 
         blaschke_factor = torch.exp(1j * phase)
-
         return blaschke_factor
 
     def forward(self,
@@ -147,7 +146,7 @@ def plot_signal_approx(signal_complex: np.ndarray, scale: np.ndarray, blaschke_p
                 ax[i, j].axis('off')
 
     fig.tight_layout(pad=2)
-    fig.savefig('demo_fitting_parameter.png')
+    fig.savefig('demo_fitting_parameter_1D.png')
     return
 
 def run_sample(model_input: torch.Tensor, model: torch.nn.Module, blaschke_order: int, detach_by_iter:bool) -> torch.Tensor:
@@ -183,7 +182,7 @@ def run_sample(model_input: torch.Tensor, model: torch.nn.Module, blaschke_order
 
         # This helps sanity checking the residual norms at each iteration.
         curr_sqnorm = torch.abs(residual_signal).pow(2).mean().unsqueeze(0)
-        curr_deviation = torch.sigmoid(model[iter_idx].logit_gammas) * (1 - torch.sigmoid(model[iter_idx].logit_gammas))
+        curr_deviation = model[iter_idx].gammas * (1 - model[iter_idx].gammas)
         if residual_sqnorm is None:
             residual_sqnorm = curr_sqnorm
             gamma_deviation = curr_deviation
@@ -226,7 +225,7 @@ if __name__ == '__main__':
     num_epochs = 3000
     learning_rate = 1e-2
     detach_by_iter = False
-    coeff_deviation = 10
+    coeff_binary = 10                        # Encourages root selectors (gammas) to be binary.
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -246,15 +245,15 @@ if __name__ == '__main__':
             residual_sqnorm, gamma_deviation, blaschke_product, mean_scale, active_roots_ratio = \
                 run_sample(model_input=model_input, model=model, blaschke_order=blaschke_order, detach_by_iter=detach_by_iter)
             loss_recon = residual_sqnorm.mean()
-            loss_deviation = gamma_deviation.mean()
-            loss = loss_recon + loss_deviation * coeff_deviation
+            loss_binary = gamma_deviation.mean()
+            loss = loss_recon + loss_binary * coeff_binary
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
             pbar.set_postfix(loss_recon=f'{loss_recon:.5f}',
-                             loss_deviation_scaled=f'{loss_deviation * coeff_deviation:.5f}',
+                             loss_binary_scaled=f'{loss_binary * coeff_binary:.5f}',
                              active_roots_ratio=f'{active_roots_ratio}')
 
     plot_signal_approx(signal_complex=signal_complex,
