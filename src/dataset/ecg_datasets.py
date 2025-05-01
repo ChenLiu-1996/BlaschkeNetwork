@@ -118,7 +118,9 @@ class ECGDataset(Dataset):
         # In downstream datasets, the lead order is I, II, III, aVR, aVL, aVF, V1, V2, V3, V4, V5, V6
         ecg[[4, 5]] = ecg[[5, 4]]
 
-
+        # Preprocessing: zero mean, unit variance.
+        ecg = ecg - ecg.mean(dim=1, keepdims=True)
+        ecg = ecg / (ecg.std(dim=1, keepdims=True) + 1e-6)
 
         return ecg, target
 

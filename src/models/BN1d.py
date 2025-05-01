@@ -123,9 +123,16 @@ class BlaschkeLayer1d(nn.Module):
         assert len(signal_complex.shape) == 3
         x_real = torch.real(signal_complex)                                   # [batch_size, num_channels, seq_len]
         x_imag = torch.imag(signal_complex)                                   # [batch_size, num_channels, seq_len]
-        signal = torch.stack((x_real, x_imag), dim=2).float()                 # [batch_size, num_channels, 2, seq_len]
 
-        signal = rearrange(signal, 'b c r l -> (b c) r l')                    # [batch_size * num_channels, 2, seq_len]
+        # signal_real_fft = torch.fft.rfft(x_real, n=2*L-1, dim=-1)             # [batch_size, num_channels, seq_len * 2]
+        # x_fft_real = torch.real(signal_real_fft)                              # [batch_size, num_channels, seq_len]
+        # x_fft_imag = torch.imag(signal_real_fft)                              # [batch_size, num_channels, seq_len]
+
+        # signal = torch.stack((x_real, x_imag,
+        #                       x_fft_real, x_fft_imag), dim=2).float()         # [batch_size, num_channels, 4, seq_len]
+        signal = torch.stack((x_real, x_imag), dim=2).float()         # [batch_size, num_channels, 2, seq_len]
+
+        signal = rearrange(signal, 'b c r l -> (b c) r l')                    # [batch_size * num_channels, 4, seq_len]
         assert len(signal.shape) == 3
 
         if any_requires_grad(self.param_net):
@@ -147,7 +154,7 @@ class BlaschkeLayer1d(nn.Module):
         '''
         betas have to be positive.
         '''
-        return torch.exp(self.log_betas)
+        return torch.nn.functional.softplus(self.log_betas)
 
     @property
     def gammas(self):
@@ -304,7 +311,7 @@ class BlaschkeNetwork1d(nn.Module):
         # 3 per root (alpha, log_beta, gamma), 2 per iteration: (scale_real, scale_imag).
         num_classes = self.num_roots * 3 + 2
         param_net = PatchTST(
-            num_channels=2,  # (real, imaginary)
+            num_channels=2,  # (real signal, hilbert transform, fft_real, fft_imag)
             num_classes=num_classes,
             patch_size=patch_size,
             num_patch=signal_len // patch_size,
@@ -512,9 +519,9 @@ class BlaschkeNetwork1d(nn.Module):
 
             # Track the mean scale per layer.
             if mean_scale is None:
-                mean_scale = layer.scale.detach().cpu().mean().unsqueeze(0)
+                mean_scale = layer.scale.detach().cpu().mean().unsqueeze(0).abs()
             else:
-                mean_scale = torch.cat((mean_scale, layer.scale.detach().cpu().mean().unsqueeze(0)), dim=0)
+                mean_scale = torch.cat((mean_scale, layer.scale.detach().cpu().mean().unsqueeze(0).abs()), dim=0)
 
             # Track the ratio of active roots per layer.
             active_roots = (layer.logit_gammas > 0).sum().cpu().detach()
@@ -553,5 +560,5 @@ class BlaschkeNetwork1d(nn.Module):
 if __name__ == '__main__':
     model = BlaschkeNetwork1d(layers=3, num_roots=4, signal_len=100, num_channels=10, patch_size=20)
     signal = torch.normal(0, 1, size=(32, 10, 100))
-    y, residual_sqnorm, active_roots_ratio = model(signal)
+    y, residual_sqnorm, gamma_deviation, mean_scale, active_roots_ratio = model(signal)
     signal_complex, s_arr, B_prod_arr = model.test_approximate(signal[:1, :1, :])

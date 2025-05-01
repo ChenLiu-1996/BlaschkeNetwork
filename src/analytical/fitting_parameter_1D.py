@@ -57,7 +57,7 @@ class BlaschkeParams(torch.nn.Module):
         '''
         betas have to be positive.
         '''
-        return torch.exp(self.log_betas)
+        return torch.nn.functional.softplus(self.log_betas)
 
     @property
     def gammas(self):
@@ -216,7 +216,6 @@ if __name__ == '__main__':
     # Load the signal.
     test_signal_file = '../../data/gravitational_wave_HanfordH1.txt'
     signal_df = pd.read_csv(test_signal_file, sep=' ', header=None)
-    time_arr = np.array(signal_df[0]) - np.min(signal_df[0])
     signal_arr = np.array(signal_df[1])
 
     # Parameters for Blaschke decomposition.
@@ -225,7 +224,7 @@ if __name__ == '__main__':
     num_epochs = 3000
     learning_rate = 1e-2
     detach_by_iter = False
-    coeff_binary = 10                        # Encourages root selectors (gammas) to be binary.
+    coeff_binary = 1                         # Encourages root selectors (gammas) to be binary.
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -245,15 +244,15 @@ if __name__ == '__main__':
             residual_sqnorm, gamma_deviation, blaschke_product, mean_scale, active_roots_ratio = \
                 run_sample(model_input=model_input, model=model, blaschke_order=blaschke_order, detach_by_iter=detach_by_iter)
             loss_recon = residual_sqnorm.mean()
-            loss_binary = gamma_deviation.mean()
-            loss = loss_recon + loss_binary * coeff_binary
+            loss_binary = gamma_deviation.mean() * coeff_binary
+            loss = loss_recon + loss_binary
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
             pbar.set_postfix(loss_recon=f'{loss_recon:.5f}',
-                             loss_binary_scaled=f'{loss_binary * coeff_binary:.5f}',
+                             loss_binary_scaled=f'{loss_binary:.5f}',
                              active_roots_ratio=f'{active_roots_ratio}')
 
     plot_signal_approx(signal_complex=signal_complex,

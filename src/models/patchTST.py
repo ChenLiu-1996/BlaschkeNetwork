@@ -74,22 +74,31 @@ class PatchTST(nn.Module):
         return z
 
 
+def zero_module(module):
+    '''
+    Zero out the parameters of a module and return it.
+    '''
+    for p in module.parameters():
+        p.detach().zero_()
+    return module
+
+
 class ClassificationHead(nn.Module):
     def __init__(self, num_channels, d_model, n_classes, head_dropout):
         super().__init__()
         self.flatten = nn.Flatten(start_dim=1)
         self.dropout = nn.Dropout(head_dropout)
-        self.linear = nn.Linear(num_channels * d_model, n_classes)
+        self.linear = zero_module(nn.Linear(num_channels * d_model, n_classes))
 
     def forward(self, x):
         '''
         x: [bs, num_channels, d_model, num_patch]
         output: [bs, n_classes]
         '''
-        x = x[:, :, :, -1]             # x: [bs, num_channels, d_model]
-        x = self.flatten(x)            # x: [bs, num_channels * d_model]
-        x = self.dropout(x)            # x: [bs, num_channels * d_model]
-        y = self.linear(x)             # y: [bs, n_classes]
+        x = x[:, :, :, -1]              # x: [bs, num_channels, d_model]
+        x = self.flatten(x)             # x: [bs, num_channels * d_model]
+        x = self.dropout(x)             # x: [bs, num_channels * d_model]
+        y = self.linear(x)              # y: [bs, n_classes]
         return y
 
 class PatchTSTEncoder(nn.Module):

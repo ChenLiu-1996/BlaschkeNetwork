@@ -49,7 +49,7 @@ def binary_entropy(batched_coeffs: torch.Tensor, eps: float = 1e-8) -> torch.Ten
 
 @torch.no_grad()
 def plot_signal_approx(signal_complex, s_arr, B_prod_arr, mode: str, epoch_idx: int, batch_idx: int):
-    signal_complex = signal_complex.detach().numpy()
+    signal_complex = signal_complex.detach().cpu().numpy()
     s_arr = s_arr.detach().numpy()
     B_prod_arr = B_prod_arr.detach().numpy()
     assert len(signal_complex.shape) == 3
@@ -60,13 +60,13 @@ def plot_signal_approx(signal_complex, s_arr, B_prod_arr, mode: str, epoch_idx: 
     blaschke_order = B_prod_arr.shape[-1]
 
     signal_complex = rearrange(signal_complex, 'b c l -> (b c) l').squeeze(0)
-    s_arr = rearrange(s_arr, 'b c l i -> (b c l) i').squeeze(0)
-    B_prod_arr = rearrange(B_prod_arr, 'b c l i -> (b c) l i').squeeze(0)
+    s_arr = rearrange(s_arr, 'b c 1 i -> (b c 1) i 1').squeeze(0)
+    B_prod_arr = rearrange(B_prod_arr, 'b c l i -> (b c) i l').squeeze(0)
+    time_arr = np.arange(signal_complex.shape[-1])
 
     fig, ax = plt.subplots(blaschke_order, blaschke_order + 2, figsize = (4 * blaschke_order + 8, 4 * blaschke_order))
     if blaschke_order == 1:
         ax = ax[np.newaxis, :]
-    time_arr = np.arange(signal_complex.shape[-1])
     for total_order in range(blaschke_order):
         ax[total_order, 0].plot(time_arr, signal_complex.real, label = 'original signal', color='firebrick', alpha=0.8)
         ax[total_order, 0].legend(loc='lower left')
@@ -76,18 +76,18 @@ def plot_signal_approx(signal_complex, s_arr, B_prod_arr, mode: str, epoch_idx: 
     for total_order in range(1, blaschke_order + 1):
         for curr_order in range(1, total_order + 1):
             ax[total_order - 1, curr_order].hlines(np.abs(s_arr[curr_order-1]), xmin=time_arr.min(), xmax=time_arr.max(), label = f'$s_{curr_order}$', color='darkblue', linestyle='--')
-            ax[total_order - 1, curr_order].plot(time_arr, (B_prod_arr[:, curr_order-1] * s_arr[curr_order-1]).real, label = f'$s_{curr_order}$ * ${display_blaschke_product(curr_order)}$', color='darkgreen', alpha=0.6)
+            ax[total_order - 1, curr_order].plot(time_arr, (B_prod_arr[curr_order-1] * s_arr[curr_order-1]).real, label = f'$s_{curr_order}$ * ${display_blaschke_product(curr_order)}$', color='darkgreen', alpha=0.6)
             ax[total_order - 1, curr_order].legend(loc='lower left')
             ax[total_order - 1, curr_order].spines['top'].set_visible(False)
             ax[total_order - 1, curr_order].spines['right'].set_visible(False)
 
     final = 0
     for curr_order in range(1, blaschke_order + 1):
-        final += (B_prod_arr[:, curr_order-1] * s_arr[curr_order-1]).real
+        final += (B_prod_arr[curr_order-1] * s_arr[curr_order-1]).real
         ax[curr_order - 1, blaschke_order + 1].plot(time_arr, signal_complex.real, label = 'original signal', color='firebrick', alpha=0.8)
         ax[curr_order - 1, blaschke_order + 1].plot(time_arr, final, label = 'reconstruction', color='skyblue', alpha=0.9)
         ax[curr_order - 1, blaschke_order + 1].plot(time_arr, final - signal_complex.real, label = 'residual', color='gray', alpha=1.0)
-        ax[curr_order - 1, blaschke_order + 1].set_title(f'Reconstruction Error: {np.power(np.abs(final - signal_complex.real), 2).mean():.4f}')
+        ax[curr_order - 1, blaschke_order + 1].set_title(f'Reconstruction Error: {np.power(np.abs(final - signal_complex.real), 2).mean():.5f}')
         ax[curr_order - 1, blaschke_order + 1].legend(loc='lower left')
         ax[curr_order - 1, blaschke_order + 1].spines['top'].set_visible(False)
         ax[curr_order - 1, blaschke_order + 1].spines['right'].set_visible(False)
@@ -264,10 +264,11 @@ def main(args):
 
     if not os.path.isfile(args.model_save_path):
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
-        scheduler = LinearWarmupCosineAnnealingLR(optimizer=optimizer,
-                                                warmup_start_lr=args.lr * 1e-3,
-                                                warmup_epochs=min(20, args.epoch//5),
-                                                max_epochs=args.epoch)
+        scheduler = LinearWarmupCosineAnnealingLR(
+            optimizer=optimizer,
+            warmup_start_lr=args.lr * 1e-3,
+            warmup_epochs=min(20, args.epoch//5),
+            max_epochs=args.epoch)
 
         log('Training begins.', filepath=args.log_path)
         best_auroc = 0
@@ -278,7 +279,7 @@ def main(args):
             for epoch_idx, epoch in enumerate(pbar):
                 # Training.
                 model.train()
-                train_loss_pred, train_loss_recon, train_loss_binary, train_loss_binary, train_acc, train_auroc = \
+                train_loss_pred, train_loss_recon, train_loss_binary, train_acc, train_auroc = \
                     train_epoch(train_loader=train_loader, model=model, optimizer=optimizer, loss_fn_pred=loss_fn_pred, num_classes=num_classes, device=device, epoch_idx=epoch_idx)
                 train_loss_pred_list.append(train_loss_pred)
                 train_loss_recon_list.append(train_loss_recon)
@@ -357,8 +358,8 @@ if __name__ == '__main__':
     parser.add_argument('--batch-size', type=int, default=128)
     parser.add_argument('--epoch', type=int, default=40)
     parser.add_argument('--n-plot-per-epoch', type=int, default=1)
-    parser.add_argument('--loss-recon-coeff', type=float, default=10)
-    parser.add_argument('--loss-binary-coeff', type=float, default=100)           # Encourages root selectors (gammas) to be binary.
+    parser.add_argument('--loss-recon-coeff', type=float, default=1)
+    parser.add_argument('--loss-binary-coeff', type=float, default=1)             # Encourages root selectors (gammas) to be binary.
     parser.add_argument('--num-workers', type=int, default=8)
     parser.add_argument('--random-seed', type=int, default=1)
     parser.add_argument('--subset', type=str, default='super_class')
