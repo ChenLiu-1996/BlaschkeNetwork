@@ -123,7 +123,7 @@ def plot_signal_approx(signal_complex: np.ndarray, scale: np.ndarray, blaschke_p
 
     for total_order in range(1, blaschke_order + 1):
         for curr_order in range(1, total_order + 1):
-            ax[total_order - 1, curr_order].hlines(scale[curr_order-1].real, xmin=time_arr.min(), xmax=time_arr.max(), label = f'$s_{curr_order}$', color='darkblue', linestyle='--')
+            ax[total_order - 1, curr_order].hlines(np.abs(scale[curr_order-1]), xmin=time_arr.min(), xmax=time_arr.max(), label = f'$s_{curr_order}$', color='darkblue', linestyle='--')
             ax[total_order - 1, curr_order].plot(time_arr, (blaschke_product[curr_order-1] * scale[curr_order-1]).real, label = f'$s_{curr_order}$ * ${display_blaschke_product(curr_order)}$', color='darkgreen', alpha=0.6)
             ax[total_order - 1, curr_order].legend(loc='lower left')
             ax[total_order - 1, curr_order].spines['top'].set_visible(False)
