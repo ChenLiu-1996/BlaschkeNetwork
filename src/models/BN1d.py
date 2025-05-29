@@ -130,9 +130,9 @@ class BlaschkeLayer1d(nn.Module):
 
         # signal = torch.stack((x_real, x_imag,
         #                       x_fft_real, x_fft_imag), dim=2).float()         # [batch_size, num_channels, 4, seq_len]
-        signal = torch.stack((x_real, x_imag), dim=2).float()         # [batch_size, num_channels, 2, seq_len]
 
-        signal = rearrange(signal, 'b c r l -> (b c) r l')                    # [batch_size * num_channels, 4, seq_len]
+        signal = torch.stack((x_real, x_imag), dim=2).float()                 # [batch_size, num_channels, 2, seq_len]
+        signal = rearrange(signal, 'b c r l -> (b c) r l')                    # [batch_size * num_channels, 2, seq_len]
         assert len(signal.shape) == 3
 
         if any_requires_grad(self.param_net):
@@ -311,7 +311,7 @@ class BlaschkeNetwork1d(nn.Module):
         # 3 per root (alpha, log_beta, gamma), 2 per iteration: (scale_real, scale_imag).
         num_classes = self.num_roots * 3 + 2
         param_net = PatchTST(
-            num_channels=2,  # (real signal, hilbert transform, fft_real, fft_imag)
+            num_channels=2,  # (real, imaginary)
             num_classes=num_classes,
             patch_size=patch_size,
             num_patch=signal_len // patch_size,
@@ -479,9 +479,9 @@ class BlaschkeNetwork1d(nn.Module):
         signal_complex = self.complexify(signal)
 
         blaschke_factors = []
-        residual_signal, residual_sqnorm, gamma_deviation = signal_complex, None, None
+        residual_signal, residual_sqnorm_withgrad, gamma_deviation_withgrad = signal_complex, None, None
+        blaschke_coeffs, scales_withgrad = None, None
         mean_scale, active_roots_ratio = None, None
-        blaschke_coeffs = None
 
         for layer in self.encoder:
             blaschke_factors.append(layer(residual_signal))
@@ -510,12 +510,12 @@ class BlaschkeNetwork1d(nn.Module):
             # This helps sanity checking the residual norms at each iteration.
             curr_sqnorm = torch.abs(residual_signal).pow(2).mean().unsqueeze(0)
             curr_deviation = layer.gammas * (1 - layer.gammas)
-            if residual_sqnorm is None:
-                residual_sqnorm = curr_sqnorm
-                gamma_deviation = curr_deviation
+            if residual_sqnorm_withgrad is None:
+                residual_sqnorm_withgrad = curr_sqnorm
+                gamma_deviation_withgrad = curr_deviation
             else:
-                residual_sqnorm = torch.cat((residual_sqnorm, curr_sqnorm), dim=0)
-                gamma_deviation = torch.cat((gamma_deviation, curr_deviation), dim=0)
+                residual_sqnorm_withgrad = torch.cat((residual_sqnorm_withgrad, curr_sqnorm), dim=0)
+                gamma_deviation_withgrad = torch.cat((gamma_deviation_withgrad, curr_deviation), dim=0)
 
             # Track the mean scale per layer.
             if mean_scale is None:
@@ -539,16 +539,21 @@ class BlaschkeNetwork1d(nn.Module):
                                           rearrange(layer.gammas, 'b c r -> b (c r)'),
                                           rearrange(layer.scale_real, 'b c r -> b (c r)'),
                                           rearrange(layer.scale_imag, 'b c r -> b (c r)')
-                                          ), dim=1)
+                                          ), dim=1).detach()
 
             if blaschke_coeffs is None:
                 blaschke_coeffs = curr_iter_coeffs
             else:
                 blaschke_coeffs = torch.cat((blaschke_coeffs, curr_iter_coeffs), dim=1)
 
+            if scales_withgrad is None:
+                scales_withgrad = layer.scale
+            else:
+                scales_withgrad = torch.cat((scales_withgrad, layer.scale), dim=2)
+
         y_pred = self.classifier(blaschke_coeffs)
 
-        return y_pred, residual_sqnorm, gamma_deviation, mean_scale.numpy(), active_roots_ratio.numpy()
+        return y_pred, residual_sqnorm_withgrad, gamma_deviation_withgrad, scales_withgrad, mean_scale.numpy(), active_roots_ratio.numpy()
 
 
     def to(self, device: str):

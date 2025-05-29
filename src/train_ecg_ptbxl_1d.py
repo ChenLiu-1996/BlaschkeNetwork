@@ -111,7 +111,7 @@ def plot_signal_approx(signal_complex, s_arr, B_prod_arr, mode: str, epoch_idx: 
 
 
 def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes, device, epoch_idx):
-    train_loss_pred, train_loss_recon, train_loss_binary, train_acc, train_auroc = 0, 0, 0, 0, 0
+    train_loss_pred, train_loss_recon, train_loss_binary, train_loss_direct, train_acc, train_auroc = 0, 0, 0, 0, 0, 0
     y_true_arr, y_pred_arr = None, None
     plot_freq = max(len(train_loader) // args.n_plot_per_epoch, 1)
 
@@ -120,25 +120,35 @@ def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes, devic
 
         optimizer.zero_grad()
         x = x.to(device)
-        y_pred, residual_sqnorm, gamma_deviation, _, _ = model(x)
+        y_pred, residual_sqnorm_withgrad, gamma_deviation_withgrad, scales_withgrad, _, _ = model(x)
 
         loss_pred = loss_fn_pred(y_pred, y_true.to(device))
-        loss_recon = residual_sqnorm.mean() * args.loss_recon_coeff
-        loss_binary = gamma_deviation.mean() * args.loss_binary_coeff
+        loss_recon = residual_sqnorm_withgrad.mean() * args.loss_recon_coeff
+        loss_binary = gamma_deviation_withgrad.mean() * args.loss_binary_coeff
 
-        # if args.direct_supervision:
-        #     signal = x.detach().cpu().numpy()
-        #     true_scale, true_blaschke_factor, _ = blaschke_decomposition(signal=signal,  num_blaschke_iters=args.layers, fourier_poly_order=signal.shape[-1], oversampling_rate=2, lowpass_order=1, carrier_freq=0)
-        #     assert np.all(np.diff(true_scale, axis=-1) == 0)
-        #     true_scale = true_scale[:, :, :, 0]
+        loss_direct = torch.zeros(1).to(device)
+        if args.loss_direct_coeff > 0:
+            signal = x.detach().cpu().numpy()
+            true_scale, true_blaschke_factor, _, _ = blaschke_decomposition(
+                signal=signal,
+                num_blaschke_iters=args.layers,
+                fourier_poly_order=signal.shape[-1],
+                oversampling_rate=2,
+                lowpass_order=1,
+                carrier_freq=0)
+            assert np.all(np.diff(true_scale, axis=-1) == 0)
+            true_scale = true_scale[:, :, :, 0]
+            true_scale = rearrange(true_scale, 'i b c -> b c i')
+            loss_direct = (torch.from_numpy(true_scale).to(device) - scales_withgrad).abs().pow(2).mean() * args.loss_direct_coeff
 
-        loss = loss_pred + loss_recon + loss_binary
+        loss = loss_pred + loss_recon + loss_binary + loss_direct
         loss.backward()
         optimizer.step()
 
         train_loss_pred += loss_pred.item()
         train_loss_recon += loss_recon.item()
         train_loss_binary += loss_binary.item()
+        train_loss_direct += loss_direct.item()
 
         if y_true_arr is None:
             y_true_arr = y_true.detach().cpu().numpy()
@@ -155,6 +165,7 @@ def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes, devic
     train_loss_pred /= len(train_loader)
     train_loss_recon /= len(train_loader)
     train_loss_binary /= len(train_loader)
+    train_loss_direct /= len(train_loader)
 
     acc_by_class, auroc_by_class = [], []
     for class_idx in range(num_classes):
@@ -170,7 +181,7 @@ def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes, devic
     train_acc = np.mean(acc_by_class)
     train_auroc = np.mean(auroc_by_class)
 
-    return train_loss_pred, train_loss_recon, train_loss_binary, train_acc, train_auroc
+    return train_loss_pred, train_loss_recon, train_loss_binary, train_loss_direct, train_acc, train_auroc
 
 @torch.no_grad()
 def infer(loader, model, loss_fn_pred, num_classes, device, epoch_idx):
@@ -182,7 +193,7 @@ def infer(loader, model, loss_fn_pred, num_classes, device, epoch_idx):
     for batch_idx, (x, y_true) in enumerate(loader):
         should_plot = batch_idx % plot_freq == 0
         x = x.to(device)
-        y_pred, residual_sqnorm, gamma_deviation, mean_scale, active_roots_ratio = model(x)
+        y_pred, residual_sqnorm, gamma_deviation, _, mean_scale, active_roots_ratio = model(x)
 
         loss_pred = loss_fn_pred(y_pred, y_true.to(device))
         loss_recon = residual_sqnorm.mean()
@@ -279,7 +290,7 @@ def main(args):
             for epoch_idx, epoch in enumerate(pbar):
                 # Training.
                 model.train()
-                train_loss_pred, train_loss_recon, train_loss_binary, train_acc, train_auroc = \
+                train_loss_pred, train_loss_recon, train_loss_binary, train_loss_direct, train_acc, train_auroc = \
                     train_epoch(train_loader=train_loader, model=model, optimizer=optimizer, loss_fn_pred=loss_fn_pred, num_classes=num_classes, device=device, epoch_idx=epoch_idx)
                 train_loss_pred_list.append(train_loss_pred)
                 train_loss_recon_list.append(train_loss_recon)
@@ -307,7 +318,7 @@ def main(args):
                     tr_acc=f'{100 * train_acc:.2f}', val_acc=f'{100 * val_acc:.2f}',
                     tr_auroc=f'{100 * train_auroc:.2f}', val_auroc=f'{100 * val_auroc:.2f}',
                     lr=optimizer.param_groups[0]['lr'])
-                log_string = f'Epoch [{epoch + 1}/{args.epoch}]. Train pred loss = {train_loss_pred:.3f}, recon loss = {train_loss_recon:.5f}, binary loss = {train_loss_binary:.5f}, acc = {100 * train_acc:.3f}, auroc = {100 * train_auroc:.3f}.'
+                log_string = f'Epoch [{epoch + 1}/{args.epoch}]. Train pred loss = {train_loss_pred:.3f}, recon loss = {train_loss_recon:.5f}, binary loss = {train_loss_binary:.5f}, direct loss = {train_loss_direct:.5f}, acc = {100 * train_acc:.3f}, auroc = {100 * train_auroc:.3f}.'
                 log_string += f'\nValidation pred loss = {val_loss_pred:.3f}, recon loss = {val_loss_recon:.5f}, binary loss = {val_loss_binary:.5f}, acc = {100 * val_acc:.3f}, auroc = {100 * val_auroc:.3f}, val_residual_by_iter = {val_residual_by_iter}, mean scale = {val_mean_scale_by_iter}, active roots ratio = {val_active_root_ratio_by_iter}.'
                 log(log_string, filepath=args.log_path, to_console=False)
 
@@ -353,11 +364,11 @@ if __name__ == '__main__':
     parser.add_argument('--layers', type=int, default=1)
     parser.add_argument('--num-roots', type=int, default=8)
     parser.add_argument('--detach-by-iter', action='store_true')                  # Independently optimize Blaschke decomposition per iteration.
-    parser.add_argument('--direct-supervision', action='store_true')              # Use the analytical Blaschke coeffs to supervise training.
     parser.add_argument('--lr', help='Learning rate.', type=float, default=1e-2)
     parser.add_argument('--batch-size', type=int, default=128)
     parser.add_argument('--epoch', type=int, default=40)
     parser.add_argument('--n-plot-per-epoch', type=int, default=1)
+    parser.add_argument('--loss-direct-coeff', type=float, default=0)             # Use the analytical Blaschke coeffs to supervise training.
     parser.add_argument('--loss-recon-coeff', type=float, default=1)
     parser.add_argument('--loss-binary-coeff', type=float, default=1)             # Encourages root selectors (gammas) to be binary.
     parser.add_argument('--num-workers', type=int, default=8)
@@ -371,7 +382,7 @@ if __name__ == '__main__':
     ROOT_DIR = '/'.join(os.path.realpath(__file__).split('/')[:-2])
     args.data_dir = args.data_dir.replace('$ROOT_DIR', ROOT_DIR)
 
-    curr_run_identifier = f'ECG_PTBXL/subset={args.subset}-{args.training_percentage}%_BN1d-L{args.layers}_R{args.num_roots}_DS-{args.direct_supervision}_detach-{args.detach_by_iter}_patch-{args.patch_size}_reconCoeff-{args.loss_recon_coeff}_binaryCoeff-{args.loss_binary_coeff}_lr-{args.lr}_epoch-{args.epoch}_seed-{args.random_seed}'
+    curr_run_identifier = f'ECG_PTBXL/subset={args.subset}-{args.training_percentage}%_BN1d-L{args.layers}_R{args.num_roots}_detach-{args.detach_by_iter}_patch-{args.patch_size}_reconCoeff-{args.loss_recon_coeff}_binaryCoeff-{args.loss_binary_coeff}_directCoeff-{args.loss_direct_coeff}_lr-{args.lr}_epoch-{args.epoch}_seed-{args.random_seed}'
     args.results_dir = os.path.join(ROOT_DIR, 'results', curr_run_identifier)
     args.log_path = os.path.join(args.results_dir, 'log.txt')
     args.model_save_path = os.path.join(args.results_dir, 'model.pty')

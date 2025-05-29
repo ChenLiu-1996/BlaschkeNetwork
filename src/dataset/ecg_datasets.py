@@ -20,7 +20,7 @@ class ECGDataset(Dataset):
         Args:
             data_path (string): Path to store raw data.
             csv_file (string): Path to the .csv file with labels and data path.
-            mode (string): ptbxl/icbeb/chapman.
+            dataset_name (string): ptbxl/icbeb/chapman.
         '''
         self.dataset_name = dataset_name
 
