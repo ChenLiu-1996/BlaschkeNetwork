@@ -108,7 +108,7 @@ def plot_signal_approx(signal_complex, s_arr, B_prod_arr, mode: str, epoch_idx: 
 
 
 def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes, device, epoch_idx):
-    train_loss_pred, train_loss_recon, train_loss_orth, train_loss_direct, train_acc, train_auroc = 0, 0, 0, 0, 0, 0
+    train_loss_pred, train_loss_recon, train_loss_orth, train_loss_smoothness, train_loss_direct, train_acc, train_auroc = 0, 0, 0, 0, 0, 0, 0
     y_true_arr, y_pred_arr = None, None
     plot_freq = max(len(train_loader) // args.n_plot_per_epoch, 1)
 
@@ -117,11 +117,12 @@ def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes, devic
 
         optimizer.zero_grad()
         x = x.to(device)
-        y_pred, residual_sqnorm_by_iter, scale_by_iter, orth_loss = model(x)
+        y_pred, residual_sqnorm_by_iter, scale_by_iter, orth_loss, smoothness_loss = model(x)
 
         loss_pred = loss_fn_pred(y_pred, y_true.to(device))
         loss_recon = residual_sqnorm_by_iter.mean() * args.loss_recon_coeff
         loss_orth = orth_loss * args.loss_orth_coeff
+        loss_smoothness = smoothness_loss * args.loss_smoothness_coeff
 
         loss_direct = torch.zeros(1).to(device)
         # if args.loss_direct_coeff > 0:
@@ -138,13 +139,14 @@ def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes, devic
         #     true_scale = rearrange(true_scale, 'i b c -> b c i')
         #     loss_direct = (torch.from_numpy(true_scale).to(device) - scale_by_layer).abs().pow(2).mean() * args.loss_direct_coeff
 
-        loss = loss_pred + loss_recon + loss_orth + loss_direct
+        loss = loss_pred + loss_recon + loss_orth + train_loss_smoothness + loss_direct
         loss.backward()
         optimizer.step()
 
         train_loss_pred += loss_pred.item()
         train_loss_recon += loss_recon.item()
         train_loss_orth += loss_orth.item()
+        train_loss_smoothness += loss_smoothness.item()
         train_loss_direct += loss_direct.item()
 
         if y_true_arr is None:
@@ -162,6 +164,7 @@ def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes, devic
     train_loss_pred /= len(train_loader)
     train_loss_recon /= len(train_loader)
     train_loss_orth /= len(train_loader)
+    train_loss_smoothness /= len(train_loader)
     train_loss_direct /= len(train_loader)
 
     acc_by_class, auroc_by_class = [], []
@@ -178,7 +181,7 @@ def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes, devic
     train_acc = np.mean(acc_by_class)
     train_auroc = np.mean(auroc_by_class)
 
-    return train_loss_pred, train_loss_recon, train_loss_orth, train_loss_direct, train_acc, train_auroc
+    return train_loss_pred, train_loss_recon, train_loss_orth, train_loss_smoothness, train_loss_direct, train_acc, train_auroc
 
 @torch.no_grad()
 def infer(loader, model, loss_fn_pred, num_classes, device, epoch_idx):
@@ -190,7 +193,7 @@ def infer(loader, model, loss_fn_pred, num_classes, device, epoch_idx):
     for batch_idx, (x, y_true) in enumerate(loader):
         should_plot = batch_idx % plot_freq == 0
         x = x.to(device)
-        y_pred, residual_sqnorm_by_iter, scale_by_iter, orth_loss = model(x)
+        y_pred, residual_sqnorm_by_iter, scale_by_iter, orth_loss, smoothness_loss = model(x)
 
         loss_pred = loss_fn_pred(y_pred, y_true.to(device))
         loss_recon = residual_sqnorm_by_iter.mean()
@@ -281,7 +284,7 @@ def main(args):
             for epoch_idx, epoch in enumerate(pbar):
                 # Training.
                 model.train()
-                train_loss_pred, train_loss_recon, train_loss_orth, train_loss_direct, train_acc, train_auroc = \
+                train_loss_pred, train_loss_recon, train_loss_orth, train_loss_smoothness, train_loss_direct, train_acc, train_auroc = \
                     train_epoch(train_loader=train_loader, model=model, optimizer=optimizer, loss_fn_pred=loss_fn_pred, num_classes=num_classes, device=device, epoch_idx=epoch_idx)
                 train_loss_pred_list.append(train_loss_pred)
                 train_loss_recon_list.append(train_loss_recon)
@@ -307,7 +310,7 @@ def main(args):
                     tr_acc=f'{100 * train_acc:.2f}', val_acc=f'{100 * val_acc:.2f}',
                     tr_auroc=f'{100 * train_auroc:.2f}', val_auroc=f'{100 * val_auroc:.2f}',
                     lr=optimizer.param_groups[0]['lr'])
-                log_string = f'Epoch [{epoch + 1}/{args.epoch}]. Train pred loss = {train_loss_pred:.3f}, recon loss = {train_loss_recon:.5f}, orthogonality loss = {train_loss_orth:.5f}, direct loss = {train_loss_direct:.5f}, acc = {100 * train_acc:.3f}, auroc = {100 * train_auroc:.3f}.'
+                log_string = f'Epoch [{epoch + 1}/{args.epoch}]. Train pred loss = {train_loss_pred:.3f}, recon loss = {train_loss_recon:.5f}, orthogonality loss = {train_loss_orth:.5f}, smoothness loss = {train_loss_smoothness:.5f}, direct loss = {train_loss_direct:.5f}, acc = {100 * train_acc:.3f}, auroc = {100 * train_auroc:.3f}.'
                 log_string += f'\nValidation pred loss = {val_loss_pred:.3f}, recon loss = {val_loss_recon:.5f}, acc = {100 * val_acc:.3f}, auroc = {100 * val_auroc:.3f}, val_residual_by_iter = {val_residual_by_iter}, mean scale = {val_mean_scale_by_iter}.'
                 log(log_string, filepath=args.log_path, to_console=False)
 
@@ -354,18 +357,19 @@ if __name__ == '__main__':
     parser.add_argument('--epoch', type=int, default=20)
     parser.add_argument('--n-plot-per-epoch', type=int, default=1)
     parser.add_argument('--loss-recon-coeff', type=float, default=1)
-    parser.add_argument('--loss-orth-coeff', type=float, default=1)
+    parser.add_argument('--loss-orth-coeff', type=float, default=10)
+    parser.add_argument('--loss-smoothness-coeff', type=float, default=1)
     parser.add_argument('--loss-direct-coeff', type=float, default=0)             # Use the analytical Blaschke coeffs to supervise training.
     parser.add_argument('--num-workers', type=int, default=8)
     parser.add_argument('--random-seed', type=int, default=1)
-    parser.add_argument('--patch-size', type=int, default=5)
+    parser.add_argument('--patch-size', type=int, default=1)
     parser.add_argument('--data-path', type=str, default='$ROOT_DIR/data/simulated/simulated_sines.npz')
     args = SimpleNamespace(**vars(parser.parse_args()))
 
     ROOT_DIR = '/'.join(os.path.realpath(__file__).split('/')[:-2])
     args.data_path = args.data_path.replace('$ROOT_DIR', ROOT_DIR)
 
-    curr_run_identifier = f'Simulated_Sines/BN1d-L{args.layers}_detach-{args.detach_by_iter}_patch-{args.patch_size}_reconCoeff-{args.loss_recon_coeff}_orthCoeff-{args.loss_orth_coeff}_directCoeff-{args.loss_direct_coeff}_lr-{args.lr}_epoch-{args.epoch}_seed-{args.random_seed}'
+    curr_run_identifier = f'Simulated_Sines/BN1d-L{args.layers}_detach-{args.detach_by_iter}_patch-{args.patch_size}_reconCoeff-{args.loss_recon_coeff}_orthCoeff-{args.loss_orth_coeff}_smoothnessCoeff-{args.loss_orth_coeff}_directCoeff-{args.loss_direct_coeff}_lr-{args.lr}_epoch-{args.epoch}_seed-{args.random_seed}'
     args.results_dir = os.path.join(ROOT_DIR, 'results', curr_run_identifier)
     args.log_path = os.path.join(args.results_dir, 'log.txt')
     args.model_save_path = os.path.join(args.results_dir, 'model.pty')

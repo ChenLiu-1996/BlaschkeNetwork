@@ -92,8 +92,8 @@ class PatchTST(nn.Module):
 class PredictionHead(nn.Module):
     def __init__(self, d_model, patch_size, head_dropout):
         super().__init__()
-        self.proj = nn.Linear(d_model, patch_size)
         self.dropout = nn.Dropout(head_dropout)
+        self.linear = nn.Linear(d_model, patch_size)
 
     def forward(self, z):
         '''
@@ -101,7 +101,7 @@ class PredictionHead(nn.Module):
         output: [bs, num_classes]
         '''
         z = self.dropout(z)                    # [bs, num_patch, num_channels, d_model]
-        z = self.proj(z)                       # [bs, num_patch, num_channels, patch_size]
+        z = self.linear(z)                     # [bs, num_patch, num_channels, patch_size]
         return z
 
 class ClassificationHead(nn.Module):
