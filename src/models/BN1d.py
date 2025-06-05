@@ -122,6 +122,7 @@ class BlaschkeLayer1d(nn.Module):
         scale = rearrange(scale, '(b c) r -> b c r', b=B, c=C)                # [batch_size, num_channels, 2]
         assert b_factor.shape[2] == 2
         b_factor = b_factor[:, :, 0, :] + 1j * b_factor[:, :, 1, :]
+        b_factor = b_factor / (b_factor.abs() + 1e-9)                         # Unit modulus.
         assert scale.shape[2] == 2
         scale = scale[:, :, 0] + 1j * scale[:, :, 1]
         return b_factor, scale
@@ -391,7 +392,7 @@ class BlaschkeNetwork1d(nn.Module):
 
         blaschke_factors = []
         residual_signal, residual_sqnorm_by_iter, scale_by_iter = signal_complex, None, None
-        mean_scale, feature_bank = None, None
+        feature_bank = None
 
         for layer in self.encoder:
             factor, scale = layer(residual_signal)

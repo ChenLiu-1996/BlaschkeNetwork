@@ -195,7 +195,7 @@ def infer(loader, model, loss_fn_pred, num_classes, device, epoch_idx):
         avg_loss_pred += loss_pred.item()
         avg_loss_recon += loss_recon.item() * args.loss_recon_coeff
         residual_by_iter += residual_sqnorm_by_iter.detach().cpu().numpy()
-        mean_scale_by_iter += scale_by_iter.mean(dim=(0,1))
+        mean_scale_by_iter += scale_by_iter.mean(dim=(0,1)).detach().cpu().numpy()
 
         if y_true_arr is None:
             y_true_arr = y_true.detach().cpu().numpy()
@@ -346,7 +346,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--layers', type=int, default=1)
     parser.add_argument('--detach-by-iter', action='store_true')                  # Independently optimize Blaschke decomposition per iteration.
-    parser.add_argument('--lr', help='Learning rate.', type=float, default=1e-2)
+    parser.add_argument('--lr', help='Learning rate.', type=float, default=1e-4)
     parser.add_argument('--batch-size', type=int, default=128)
     parser.add_argument('--epoch', type=int, default=40)
     parser.add_argument('--n-plot-per-epoch', type=int, default=1)
