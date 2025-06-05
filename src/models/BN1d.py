@@ -358,12 +358,14 @@ class BlaschkeNetwork1d(nn.Module):
             # F_{n+1} = F_n - s_n * B_1 * ... * B_n.
             residual_signal = residual_signal - curr_signal_approx
 
+            curr_scale = scale[..., None].cpu().unsqueeze(-1)
+            curr_B_prod = blaschke_product.cpu().unsqueeze(-1)
             if s_arr is None:
-                s_arr = scale[..., None].cpu().unsqueeze(-1)
-                B_prod_arr = blaschke_product.cpu().unsqueeze(-1)
+                s_arr = curr_scale
+                B_prod_arr = curr_B_prod
             else:
-                s_arr = torch.cat((s_arr, scale[..., None].cpu().unsqueeze(-1)), dim=-1)
-                B_prod_arr = torch.cat((B_prod_arr, blaschke_product.cpu().unsqueeze(-1)), dim=-1)
+                s_arr = torch.cat((s_arr, curr_scale), dim=-1)
+                B_prod_arr = torch.cat((B_prod_arr, curr_B_prod), dim=-1)
 
         return signal_complex, s_arr, B_prod_arr
 
@@ -391,8 +393,8 @@ class BlaschkeNetwork1d(nn.Module):
         signal_complex = self.complexify(signal)
 
         blaschke_factors = []
-        residual_signal, residual_sqnorm_by_iter, scale_by_iter = signal_complex, None, None
-        feature_bank = None
+        residual_signal, feature_bank = signal_complex, None
+        residual_sqnorm_by_iter, scale_by_iter, orth_loss = None, None, torch.zeros(1).to(signal.device)
 
         for layer in self.encoder:
             factor, scale = layer(residual_signal)
@@ -426,21 +428,27 @@ class BlaschkeNetwork1d(nn.Module):
             else:
                 residual_sqnorm_by_iter = torch.cat((residual_sqnorm_by_iter, curr_sqnorm), dim=0)
 
-            feature = torch.cat((curr_signal_approx.real[..., None], curr_signal_approx.imag[..., None]), dim=-1)
+            curr_feature = torch.cat((curr_signal_approx.real[..., None], curr_signal_approx.imag[..., None]), dim=-1)
             if feature_bank is None:
-                feature_bank = feature[..., None]
+                feature_bank = curr_feature[..., None]
             else:
-                feature_bank = torch.cat((feature_bank, feature[..., None]), dim=-1)
+                feature_bank = torch.cat((feature_bank, curr_feature[..., None]), dim=-1)
 
+            curr_scale = scale[..., None]
             if scale_by_iter is None:
-                scale_by_iter = scale[..., None]
+                scale_by_iter = curr_scale
             else:
-                scale_by_iter = torch.cat((scale_by_iter, scale[..., None]), dim=-1)
+                scale_by_iter = torch.cat((scale_by_iter, curr_scale), dim=-1)
+
+        for i in range(feature_bank.shape[-1]):
+            for j in range(i + 1, feature_bank.shape[-1]):
+                curr_inner_prod = torch.sum(torch.conj(feature_bank[..., i]) * feature_bank[..., j], dim=-1).real
+                orth_loss += (curr_inner_prod ** 2).mean()
 
         classifier_input = rearrange(feature_bank, 'b c l r d -> b 1 (c r d) l')
         y_pred = self.classifier(classifier_input)
 
-        return y_pred, residual_sqnorm_by_iter, scale_by_iter, feature_bank
+        return y_pred, residual_sqnorm_by_iter, scale_by_iter, orth_loss
 
 
     def to(self, device: str):
@@ -452,5 +460,5 @@ class BlaschkeNetwork1d(nn.Module):
 if __name__ == '__main__':
     model = BlaschkeNetwork1d(layers=3, num_roots=4, signal_len=100, num_channels=10, patch_size=20, out_classes=10)
     signal = torch.normal(0, 1, size=(32, 10, 100))
-    y_pred, residual_sqnorm_by_iter, scale_by_iter, feature_bank = model(signal)
+    y_pred, residual_sqnorm_by_iter, scale_by_iter, orth_loss = model(signal)
     signal_complex, s_arr, B_prod_arr = model.test_approximate(signal[:1, :1, :])
