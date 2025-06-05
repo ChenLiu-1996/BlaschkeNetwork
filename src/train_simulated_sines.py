@@ -247,7 +247,7 @@ def main(args):
     train_loader, val_loader, test_loader, num_classes = load_simulated_dataset(args)
 
     model = BlaschkeNetwork1d(
-        signal_len=100,
+        signal_len=200,
         num_channels=1,
         layers=args.layers,
         detach_by_iter=args.detach_by_iter,
