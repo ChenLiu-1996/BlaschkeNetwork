@@ -14,27 +14,24 @@ from models.BN1d import BlaschkeNetwork1d
 from nn_utils.scheduler import LinearWarmupCosineAnnealingLR
 from nn_utils.seed import seed_everything
 from nn_utils.log import log, count_parameters
-from dataset.ecg_datasets import get_ecg_dataset
+from dataset.simulated_sines import SimulatedSineDataset
 from analytical.analytical_decomposition import blaschke_decomposition, display_blaschke_product
 
 
-def load_ptbxl(args):
-    data_path = os.path.join(args.data_dir, 'PTBXL')
+def load_simulated_dataset(args):
+    dataset = SimulatedSineDataset(npz_path=args.data_path)
 
-    data_split_dir = os.path.join(args.data_dir, 'data_split', 'ptbxl', args.subset)
-    train_csv_path = os.path.join(data_split_dir, f'ptbxl_{args.subset}_train.csv')
-    val_csv_path = os.path.join(data_split_dir, f'ptbxl_{args.subset}_val.csv')
-    test_csv_path = os.path.join(data_split_dir, f'ptbxl_{args.subset}_test.csv')
-
-    train_set = get_ecg_dataset(data_path, train_csv_path, mode='train', dataset_name='ptbxl', ratio=args.training_percentage)
-    val_set = get_ecg_dataset(data_path, val_csv_path, mode='val', dataset_name='ptbxl')
-    test_set = get_ecg_dataset(data_path, test_csv_path, mode='test', dataset_name='ptbxl')
+    total_size = len(dataset)
+    train_size = int(0.8 * total_size)
+    val_size = int(0.1 * total_size)
+    test_size = total_size - train_size - val_size
+    train_set, val_set, test_set = torch.utils.data.random_split(dataset, [train_size, val_size, test_size])
 
     train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
     val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
     test_loader = DataLoader(test_set, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
-    return train_loader, val_loader, test_loader, train_set.num_classes
+    return train_loader, val_loader, test_loader, dataset.num_classes()
 
 
 def binary_entropy(batched_coeffs: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
@@ -111,7 +108,7 @@ def plot_signal_approx(signal_complex, s_arr, B_prod_arr, mode: str, epoch_idx: 
 
 
 def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes, device, epoch_idx):
-    train_loss_pred, train_loss_recon, train_loss_binary, train_loss_direct, train_acc, train_auroc = 0, 0, 0, 0, 0, 0
+    train_loss_pred, train_loss_recon, train_loss_direct, train_acc, train_auroc = 0, 0, 0, 0, 0
     y_true_arr, y_pred_arr = None, None
     plot_freq = max(len(train_loader) // args.n_plot_per_epoch, 1)
 
@@ -120,34 +117,32 @@ def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes, devic
 
         optimizer.zero_grad()
         x = x.to(device)
-        y_pred, residual_sqnorm_withgrad, gamma_deviation_withgrad, scales_withgrad, _, _ = model(x)
+        y_pred, residual_sqnorm_by_iter, scale_by_iter, feature_bank = model(x)
 
         loss_pred = loss_fn_pred(y_pred, y_true.to(device))
-        loss_recon = residual_sqnorm_withgrad.mean() * args.loss_recon_coeff
-        loss_binary = gamma_deviation_withgrad.mean() * args.loss_binary_coeff
+        loss_recon = residual_sqnorm_by_iter.mean() * args.loss_recon_coeff
 
         loss_direct = torch.zeros(1).to(device)
-        if args.loss_direct_coeff > 0:
-            signal = x.detach().cpu().numpy()
-            true_scale, true_blaschke_factor, _, _ = blaschke_decomposition(
-                signal=signal,
-                num_blaschke_iters=args.layers,
-                fourier_poly_order=signal.shape[-1],
-                oversampling_rate=2,
-                lowpass_order=1,
-                carrier_freq=0)
-            assert np.all(np.diff(true_scale, axis=-1) == 0)
-            true_scale = true_scale[:, :, :, 0]
-            true_scale = rearrange(true_scale, 'i b c -> b c i')
-            loss_direct = (torch.from_numpy(true_scale).to(device) - scales_withgrad).abs().pow(2).mean() * args.loss_direct_coeff
+        # if args.loss_direct_coeff > 0:
+        #     signal = x.detach().cpu().numpy()
+        #     true_scale, true_blaschke_factor, _, _ = blaschke_decomposition(
+        #         signal=signal,
+        #         num_blaschke_iters=args.layers,
+        #         fourier_poly_order=signal.shape[-1],
+        #         oversampling_rate=2,
+        #         lowpass_order=1,
+        #         carrier_freq=0)
+        #     assert np.all(np.diff(true_scale, axis=-1) == 0)
+        #     true_scale = true_scale[:, :, :, 0]
+        #     true_scale = rearrange(true_scale, 'i b c -> b c i')
+        #     loss_direct = (torch.from_numpy(true_scale).to(device) - scale_by_layer).abs().pow(2).mean() * args.loss_direct_coeff
 
-        loss = loss_pred + loss_recon + loss_binary + loss_direct
+        loss = loss_pred + loss_recon + loss_direct
         loss.backward()
         optimizer.step()
 
         train_loss_pred += loss_pred.item()
         train_loss_recon += loss_recon.item()
-        train_loss_binary += loss_binary.item()
         train_loss_direct += loss_direct.item()
 
         if y_true_arr is None:
@@ -164,7 +159,6 @@ def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes, devic
 
     train_loss_pred /= len(train_loader)
     train_loss_recon /= len(train_loader)
-    train_loss_binary /= len(train_loader)
     train_loss_direct /= len(train_loader)
 
     acc_by_class, auroc_by_class = [], []
@@ -181,30 +175,27 @@ def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes, devic
     train_acc = np.mean(acc_by_class)
     train_auroc = np.mean(auroc_by_class)
 
-    return train_loss_pred, train_loss_recon, train_loss_binary, train_loss_direct, train_acc, train_auroc
+    return train_loss_pred, train_loss_recon, train_loss_direct, train_acc, train_auroc
 
 @torch.no_grad()
 def infer(loader, model, loss_fn_pred, num_classes, device, epoch_idx):
-    avg_loss_pred, avg_loss_recon, avg_loss_binary, acc, auroc = 0, 0, 0, 0, 0
+    avg_loss_pred, avg_loss_recon, acc, auroc = 0, 0, 0, 0
     y_true_arr, y_pred_arr = None, None
-    residual_by_iter, mean_scale_by_iter, active_root_ratio_by_iter = 0, 0, 0
+    residual_by_iter, mean_scale_by_iter = 0, 0
     plot_freq = max(len(loader) // args.n_plot_per_epoch, 1)
 
     for batch_idx, (x, y_true) in enumerate(loader):
         should_plot = batch_idx % plot_freq == 0
         x = x.to(device)
-        y_pred, residual_sqnorm, gamma_deviation, _, mean_scale, active_roots_ratio = model(x)
+        y_pred, residual_sqnorm_by_iter, scale_by_iter, feature_bank = model(x)
 
         loss_pred = loss_fn_pred(y_pred, y_true.to(device))
-        loss_recon = residual_sqnorm.mean()
-        loss_binary = gamma_deviation.mean()
+        loss_recon = residual_sqnorm_by_iter.mean()
 
         avg_loss_pred += loss_pred.item()
         avg_loss_recon += loss_recon.item() * args.loss_recon_coeff
-        avg_loss_binary += loss_binary.item() * args.loss_binary_coeff
-        residual_by_iter += residual_sqnorm.detach().cpu().numpy()
-        mean_scale_by_iter += mean_scale
-        active_root_ratio_by_iter += active_roots_ratio
+        residual_by_iter += residual_sqnorm_by_iter.detach().cpu().numpy()
+        mean_scale_by_iter += scale_by_iter.mean(dim=(0,1))
 
         if y_true_arr is None:
             y_true_arr = y_true.detach().cpu().numpy()
@@ -224,10 +215,8 @@ def infer(loader, model, loss_fn_pred, num_classes, device, epoch_idx):
 
     avg_loss_pred /= len(loader)
     avg_loss_recon /= len(loader)
-    avg_loss_binary /= len(loader)
     residual_by_iter /= len(loader)
     mean_scale_by_iter /= len(loader)
-    active_root_ratio_by_iter /= len(loader)
 
     acc_by_class, auroc_by_class = [], []
     for class_idx in range(num_classes):
@@ -242,7 +231,7 @@ def infer(loader, model, loss_fn_pred, num_classes, device, epoch_idx):
 
     acc = np.mean(acc_by_class)
     auroc = np.mean(auroc_by_class)
-    return avg_loss_pred, avg_loss_recon, avg_loss_binary, acc, auroc, residual_by_iter, mean_scale_by_iter, active_root_ratio_by_iter
+    return avg_loss_pred, avg_loss_recon, acc, auroc, residual_by_iter, mean_scale_by_iter
 
 
 def main(args):
@@ -255,13 +244,12 @@ def main(args):
     log(config_str, filepath=args.log_path, to_console=False)
 
     seed_everything(args.random_seed)
-    train_loader, val_loader, test_loader, num_classes = load_ptbxl(args)
+    train_loader, val_loader, test_loader, num_classes = load_simulated_dataset(args)
 
     model = BlaschkeNetwork1d(
         signal_len=5000,
-        num_channels=12,
+        num_channels=1,
         layers=args.layers,
-        num_roots=args.num_roots,
         detach_by_iter=args.detach_by_iter,
         patch_size=args.patch_size,
         out_classes=num_classes)
@@ -284,27 +272,25 @@ def main(args):
         log('Training begins.', filepath=args.log_path)
         best_auroc = 0
         train_acc_list, train_auroc_list, val_acc_list, val_auroc_list = [], [], [], []
-        train_loss_pred_list, train_loss_recon_list, train_loss_binary_list = [], [], []
-        val_loss_pred_list, val_loss_recon_list, val_loss_binary_list = [], [], []
+        train_loss_pred_list, train_loss_recon_list = [], []
+        val_loss_pred_list, val_loss_recon_list = [], []
         with tqdm(range(args.epoch)) as pbar:
             for epoch_idx, epoch in enumerate(pbar):
                 # Training.
                 model.train()
-                train_loss_pred, train_loss_recon, train_loss_binary, train_loss_direct, train_acc, train_auroc = \
+                train_loss_pred, train_loss_recon, train_loss_direct, train_acc, train_auroc = \
                     train_epoch(train_loader=train_loader, model=model, optimizer=optimizer, loss_fn_pred=loss_fn_pred, num_classes=num_classes, device=device, epoch_idx=epoch_idx)
                 train_loss_pred_list.append(train_loss_pred)
                 train_loss_recon_list.append(train_loss_recon)
-                train_loss_binary_list.append(train_loss_binary)
                 train_acc_list.append(train_acc)
                 train_auroc_list.append(train_auroc)
 
                 # Validation.
                 model.eval()
-                val_loss_pred, val_loss_recon, val_loss_binary, val_acc, val_auroc, val_residual_by_iter, val_mean_scale_by_iter, val_active_root_ratio_by_iter = \
+                val_loss_pred, val_loss_recon, val_acc, val_auroc, val_residual_by_iter, val_mean_scale_by_iter = \
                     infer(loader=val_loader, model=model, loss_fn_pred=loss_fn_pred, num_classes=num_classes, device=device, epoch_idx=epoch_idx)
                 val_loss_pred_list.append(val_loss_pred)
                 val_loss_recon_list.append(val_loss_recon)
-                val_loss_binary_list.append(val_loss_binary)
                 val_acc_list.append(val_acc)
                 val_auroc_list.append(val_auroc)
 
@@ -318,8 +304,8 @@ def main(args):
                     tr_acc=f'{100 * train_acc:.2f}', val_acc=f'{100 * val_acc:.2f}',
                     tr_auroc=f'{100 * train_auroc:.2f}', val_auroc=f'{100 * val_auroc:.2f}',
                     lr=optimizer.param_groups[0]['lr'])
-                log_string = f'Epoch [{epoch + 1}/{args.epoch}]. Train pred loss = {train_loss_pred:.3f}, recon loss = {train_loss_recon:.5f}, binary loss = {train_loss_binary:.5f}, direct loss = {train_loss_direct:.5f}, acc = {100 * train_acc:.3f}, auroc = {100 * train_auroc:.3f}.'
-                log_string += f'\nValidation pred loss = {val_loss_pred:.3f}, recon loss = {val_loss_recon:.5f}, binary loss = {val_loss_binary:.5f}, acc = {100 * val_acc:.3f}, auroc = {100 * val_auroc:.3f}, val_residual_by_iter = {val_residual_by_iter}, mean scale = {val_mean_scale_by_iter}, active roots ratio = {val_active_root_ratio_by_iter}.'
+                log_string = f'Epoch [{epoch + 1}/{args.epoch}]. Train pred loss = {train_loss_pred:.3f}, recon loss = {train_loss_recon:.5f}, direct loss = {train_loss_direct:.5f}, acc = {100 * train_acc:.3f}, auroc = {100 * train_auroc:.3f}.'
+                log_string += f'\nValidation pred loss = {val_loss_pred:.3f}, recon loss = {val_loss_recon:.5f}, acc = {100 * val_acc:.3f}, auroc = {100 * val_auroc:.3f}, val_residual_by_iter = {val_residual_by_iter}, mean scale = {val_mean_scale_by_iter}.'
                 log(log_string, filepath=args.log_path, to_console=False)
 
                 # Save best model.
@@ -337,13 +323,10 @@ def main(args):
                     val_auroc_list=100*np.array(val_auroc_list).astype(np.float16),
                     train_loss_pred_list=np.array(train_loss_pred_list).astype(np.float16),
                     train_loss_recon_list=np.array(train_loss_recon_list).astype(np.float16),
-                    train_loss_binary_list=np.array(train_loss_binary_list).astype(np.float16),
                     val_loss_pred_list=np.array(val_loss_pred_list).astype(np.float16),
                     val_loss_recon_list=np.array(val_loss_recon_list).astype(np.float16),
-                    val_loss_binary_list=np.array(val_loss_binary_list).astype(np.float16),
                     val_residual_by_iter=np.array(val_residual_by_iter).astype(np.float16),
                     val_mean_scale_by_iter=np.array(val_mean_scale_by_iter).astype(np.float16),
-                    val_active_root_ratio_by_iter=np.array(val_active_root_ratio_by_iter).astype(np.float16),
                 )
 
     # Testing.
@@ -352,17 +335,16 @@ def main(args):
 
     log('Testing begins.', filepath=args.log_path)
     model.eval()
-    test_loss_pred, test_loss_recon, test_loss_binary, test_acc, test_auroc, test_residual_by_iter, test_mean_scale_by_iter, test_active_root_ratio_by_iter = \
+    test_loss_pred, test_loss_recon, test_acc, test_auroc, test_residual_by_iter, test_mean_scale_by_iter = \
         infer(loader=test_loader, model=model, loss_fn_pred=loss_fn_pred, num_classes=num_classes, device=device, epoch_idx=None)
 
-    log_string = f'\nTest pred loss = {test_loss_pred:.3f}, recon loss = {test_loss_recon:.5f}, binary loss = {test_loss_binary:.5f}, acc = {100 * test_acc:.3f}, auroc = {100 * test_auroc:.3f}, test_residual_by_iter = {test_residual_by_iter}, mean scale = {test_mean_scale_by_iter}, active roots ratio = {test_active_root_ratio_by_iter}.'
+    log_string = f'\nTest pred loss = {test_loss_pred:.3f}, recon loss = {test_loss_recon:.5f}, acc = {100 * test_acc:.3f}, auroc = {100 * test_auroc:.3f}, test_residual_by_iter = {test_residual_by_iter}, mean scale = {test_mean_scale_by_iter}.'
     log(log_string, filepath=args.log_path, to_console=False)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--layers', type=int, default=1)
-    parser.add_argument('--num-roots', type=int, default=8)
     parser.add_argument('--detach-by-iter', action='store_true')                  # Independently optimize Blaschke decomposition per iteration.
     parser.add_argument('--lr', help='Learning rate.', type=float, default=1e-2)
     parser.add_argument('--batch-size', type=int, default=128)
@@ -370,19 +352,16 @@ if __name__ == '__main__':
     parser.add_argument('--n-plot-per-epoch', type=int, default=1)
     parser.add_argument('--loss-direct-coeff', type=float, default=0)             # Use the analytical Blaschke coeffs to supervise training.
     parser.add_argument('--loss-recon-coeff', type=float, default=1)
-    parser.add_argument('--loss-binary-coeff', type=float, default=1)             # Encourages root selectors (gammas) to be binary.
     parser.add_argument('--num-workers', type=int, default=8)
     parser.add_argument('--random-seed', type=int, default=1)
-    parser.add_argument('--subset', type=str, default='super_class')
     parser.add_argument('--patch-size', type=int, default=50)
-    parser.add_argument('--training-percentage', type=int, default=100)
-    parser.add_argument('--data-dir', type=str, default='$ROOT_DIR/data/')
+    parser.add_argument('--data-path', type=str, default='$ROOT_DIR/data/simulated/simulated_sines.npz')
     args = SimpleNamespace(**vars(parser.parse_args()))
 
     ROOT_DIR = '/'.join(os.path.realpath(__file__).split('/')[:-2])
-    args.data_dir = args.data_dir.replace('$ROOT_DIR', ROOT_DIR)
+    args.data_path = args.data_path.replace('$ROOT_DIR', ROOT_DIR)
 
-    curr_run_identifier = f'ECG_PTBXL/subset={args.subset}-{args.training_percentage}%_BN1d-L{args.layers}_R{args.num_roots}_detach-{args.detach_by_iter}_patch-{args.patch_size}_reconCoeff-{args.loss_recon_coeff}_binaryCoeff-{args.loss_binary_coeff}_directCoeff-{args.loss_direct_coeff}_lr-{args.lr}_epoch-{args.epoch}_seed-{args.random_seed}'
+    curr_run_identifier = f'Simulated_Sines/BN1d-L{args.layers}_detach-{args.detach_by_iter}_patch-{args.patch_size}_reconCoeff-{args.loss_recon_coeff}_directCoeff-{args.loss_direct_coeff}_lr-{args.lr}_epoch-{args.epoch}_seed-{args.random_seed}'
     args.results_dir = os.path.join(ROOT_DIR, 'results', curr_run_identifier)
     args.log_path = os.path.join(args.results_dir, 'log.txt')
     args.model_save_path = os.path.join(args.results_dir, 'model.pty')

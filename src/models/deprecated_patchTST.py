@@ -8,7 +8,6 @@ import math
 import numpy as np
 from torch import nn
 from torch import Tensor
-from einops import rearrange
 from einops.layers.torch import Rearrange
 
 
@@ -17,9 +16,16 @@ class PatchTST(nn.Module):
     A Time Series is Worth 64 Words: Long-term Forecasting with Transformers. ICLR 2023.
     https://arxiv.org/pdf/2211.14730
     https://github.com/yuqinie98/PatchTST/blob/main/PatchTST_self_supervised/src/models/patchTST.py
+
+    Output dimension:
+         [bs x num_classes x num_channels] for prediction
+         [bs x num_classes] for regression
+         [bs x num_classes] for classification
+         [bs x num_patch x num_channels x patch_size] for pretrain
     '''
     def __init__(self,
                  num_channels: int,
+                 num_classes: int,
                  patch_size: int,
                  num_patch: int,
                  n_layers: int = 3,
@@ -37,13 +43,11 @@ class PatchTST(nn.Module):
                  pe: str = 'zeros',
                  learn_pe: bool = True,
                  head_dropout: float = 0,
-                 num_classes: int = None,
                  **kwargs):
 
         super().__init__()
 
         self.patchify = Rearrange('b c (n p) -> b n c p', p = patch_size)
-        self.unpatchify = Rearrange('b n c p -> b c (n p)')
 
         # Backbone
         self.backbone = PatchTSTEncoder(
@@ -56,73 +60,37 @@ class PatchTST(nn.Module):
             **kwargs)
 
         # Head
-        self.predictor = PredictionHead(
-            d_model=d_model, patch_size=patch_size, head_dropout=head_dropout)
-        self.classifier = ClassificationHead(
-            num_channels=num_channels, d_model=d_model, num_classes=num_classes, head_dropout=head_dropout)
+        self.num_channels = num_channels
+        self.classifier = ClassificationHead(self.num_channels, d_model, num_classes, head_dropout)
 
-    def encode(self, x):
-        '''
-        x: tensor [bs, num_channels, seq_len], where seq_len = num_patch * patch_size
-        '''
-        x = self.patchify(x)                    # [bs, num_patch, num_channels, patch_size] (b n c p)
-        z = self.backbone(x)                    # [bs, num_channels, d_model, num_patch]    (b c d n)
-        z = rearrange(z, 'b c d n -> b n c d')  # [bs, num_patch, num_channels, d_model]    (b n c d)
-        return z
-
-    def predict(self, z):
-        '''
-        tensor [bs, num_patch, num_channels, d_model]
-        '''
-        z = self.predictor(z)                   # [bs, num_patch, num_channels, patch_size] (b n c p)
-        x = self.unpatchify(z)                  # [bs, num_patch, seq_len]                  (b c (n p))
-        return x
-
-    def classify(self, z):
-        y = self.classifier(z)                  # [bs, num_channels, num_classes]           (b c k)
-        return y
-
-    def forward(self, x):
-        z = self.encode(x)
-        x = self.predict(z)
-        y = self.classify(z)
-        return x, y
-
-
-class PredictionHead(nn.Module):
-    def __init__(self, d_model, patch_size, head_dropout):
-        super().__init__()
-        self.proj = nn.Linear(d_model, patch_size)
-        self.dropout = nn.Dropout(head_dropout)
 
     def forward(self, z):
         '''
-        z: [bs, num_patch, num_channels, d_model]
-        output: [bs, num_classes]
+        z: tensor [bs, num_channels, seq_len], where seq_len = num_patch * patch_size
         '''
-        z = self.dropout(z)                    # [bs, num_patch, num_channels, d_model]
-        z = self.proj(z)                       # [bs, num_patch, num_channels, patch_size]
+        z = self.patchify(z)            # z: [bs, num_patch, num_channels, patch_size]
+        z = self.backbone(z)            # z: [bs, num_channels, d_model, num_patch]
+        z = self.classifier(z)          # z: [bs, num_channels, num_classes]
         return z
 
+
 class ClassificationHead(nn.Module):
-    def __init__(self, num_channels, d_model, num_classes, head_dropout: float = 0):
+    def __init__(self, num_channels, d_model, n_classes, head_dropout):
         super().__init__()
         self.flatten = nn.Flatten(start_dim=1)
         self.dropout = nn.Dropout(head_dropout)
-        self.linear = nn.Linear(num_channels * d_model, num_classes)
+        self.linear = nn.Linear(num_channels * d_model, n_classes)
 
-    def forward(self, z):
+    def forward(self, x):
         '''
-        z: [bs, num_patch, num_channels, d_model]
-        output: [bs, num_classes]
+        x: [bs, num_channels, d_model, num_patch]
+        output: [bs, n_classes]
         '''
-        z = rearrange(z, 'b n c d -> b c d n')  # [bs, num_channels, d_model, num_patch]
-        z = z[:, :, :, -1]                      # [bs, num_channels, d_model]
-        z = self.flatten(z)                     # [bs, num_channels * d_model]
-        z = self.dropout(z)                     # [bs, num_channels * d_model]
-        y = self.linear(z)                      # [bs, num_classes]
+        x = x[:, :, :, -1]              # x: [bs, num_channels, d_model]
+        x = self.flatten(x)             # x: [bs, num_channels * d_model]
+        x = self.dropout(x)             # x: [bs, num_channels * d_model]
+        y = self.linear(x)              # y: [bs, n_classes]
         return y
-
 
 class PatchTSTEncoder(nn.Module):
     def __init__(self, c_in, num_patch, patch_size,
@@ -463,6 +431,7 @@ if __name__ == '__main__':
 
     model = PatchTST(
         num_channels=3,
+        num_classes=1000,
         patch_size=patch_size,
         num_patch=num_patch,
         n_layers=2,
@@ -473,11 +442,9 @@ if __name__ == '__main__':
         dropout=0.2,
         head_dropout=0.2,
         act='relu',
-        res_attention=False,
-        num_classes=1000)
+        res_attention=False)
 
     time_series = torch.randn(4, 3, seq_len)
-    x, y = model(time_series)
+    logits = model(time_series) # (4, 1000)
 
-    print(f'reconstruction shape: {x.shape}')
-    print(f'classification shape: {y.shape}')
+    print(f'logits shape: {logits.shape}')
