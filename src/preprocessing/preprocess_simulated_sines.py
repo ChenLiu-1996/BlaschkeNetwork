@@ -3,7 +3,7 @@ import numpy as np
 from tqdm import tqdm
 
 
-def generate_signal(num_freqs, length=5000):
+def generate_signal(num_freqs, length=200):
     t = np.linspace(0, length, length)
     signal = np.zeros_like(t)
     for _ in range(num_freqs):

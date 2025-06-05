@@ -247,7 +247,7 @@ def main(args):
     train_loader, val_loader, test_loader, num_classes = load_simulated_dataset(args)
 
     model = BlaschkeNetwork1d(
-        signal_len=5000,
+        signal_len=100,
         num_channels=1,
         layers=args.layers,
         detach_by_iter=args.detach_by_iter,
@@ -348,13 +348,13 @@ if __name__ == '__main__':
     parser.add_argument('--detach-by-iter', action='store_true')                  # Independently optimize Blaschke decomposition per iteration.
     parser.add_argument('--lr', help='Learning rate.', type=float, default=1e-4)
     parser.add_argument('--batch-size', type=int, default=128)
-    parser.add_argument('--epoch', type=int, default=40)
+    parser.add_argument('--epoch', type=int, default=20)
     parser.add_argument('--n-plot-per-epoch', type=int, default=1)
     parser.add_argument('--loss-direct-coeff', type=float, default=0)             # Use the analytical Blaschke coeffs to supervise training.
     parser.add_argument('--loss-recon-coeff', type=float, default=1)
     parser.add_argument('--num-workers', type=int, default=8)
     parser.add_argument('--random-seed', type=int, default=1)
-    parser.add_argument('--patch-size', type=int, default=50)
+    parser.add_argument('--patch-size', type=int, default=10)
     parser.add_argument('--data-path', type=str, default='$ROOT_DIR/data/simulated/simulated_sines.npz')
     args = SimpleNamespace(**vars(parser.parse_args()))
 
