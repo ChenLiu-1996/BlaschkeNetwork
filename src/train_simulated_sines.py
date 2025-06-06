@@ -117,7 +117,7 @@ def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes, devic
 
         optimizer.zero_grad()
         x = x.to(device)
-        y_pred, residual_sqnorm_by_iter, scale_by_iter, orth_loss, smoothness_loss = model(x)
+        y_pred, residual_sqnorm_by_iter, pred_scale, pred_blaschke_factor, orth_loss, smoothness_loss = model(x)
 
         loss_pred = loss_fn_pred(y_pred, y_true.to(device))
         loss_recon = residual_sqnorm_by_iter.mean() * args.loss_recon_coeff
@@ -125,19 +125,25 @@ def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes, devic
         loss_smoothness = smoothness_loss * args.loss_smoothness_coeff
 
         loss_direct = torch.zeros(1).to(device)
-        # if args.loss_direct_coeff > 0:
-        #     signal = x.detach().cpu().numpy()
-        #     true_scale, true_blaschke_factor, _, _ = blaschke_decomposition(
-        #         signal=signal,
-        #         num_blaschke_iters=args.layers,
-        #         fourier_poly_order=signal.shape[-1],
-        #         oversampling_rate=2,
-        #         lowpass_order=1,
-        #         carrier_freq=0)
-        #     assert np.all(np.diff(true_scale, axis=-1) == 0)
-        #     true_scale = true_scale[:, :, :, 0]
-        #     true_scale = rearrange(true_scale, 'i b c -> b c i')
-        #     loss_direct = (torch.from_numpy(true_scale).to(device) - scale_by_layer).abs().pow(2).mean() * args.loss_direct_coeff
+        if args.loss_direct_coeff > 0:
+            signal = x.detach().cpu().numpy()
+            true_scale, true_blaschke_factor, _, _ = blaschke_decomposition(
+                signal=signal,
+                num_blaschke_iters=args.layers,
+                fourier_poly_order=signal.shape[-1],
+                oversampling_rate=2,
+                lowpass_order=1,
+                carrier_freq=0)
+            assert np.all(np.diff(true_scale, axis=-1) == 0)
+            true_scale = true_scale[:, :, :, 0]
+            true_scale = rearrange(true_scale, 'i b c -> b c i')
+            true_blaschke_factor = rearrange(true_blaschke_factor, 'i b c l -> b c l i')
+            assert len(pred_blaschke_factor.shape) == 5
+            assert pred_blaschke_factor.shape[3] == 2
+            pred_blaschke_factor = pred_blaschke_factor[:, :, :, 0, :] + 1j * pred_blaschke_factor[:, :, :, 1, :]
+            loss_direct_scale = (torch.from_numpy(true_scale).to(device) - pred_scale).abs().pow(2).mean()
+            loss_direct_b_factor = (torch.from_numpy(true_blaschke_factor).to(device) - pred_blaschke_factor).abs().pow(2).mean()
+            loss_direct = (loss_direct_scale + loss_direct_b_factor) * args.loss_direct_coeff
 
         loss = loss_pred + loss_recon + loss_orth + train_loss_smoothness + loss_direct
         loss.backward()
@@ -193,7 +199,7 @@ def infer(loader, model, loss_fn_pred, num_classes, device, epoch_idx):
     for batch_idx, (x, y_true) in enumerate(loader):
         should_plot = batch_idx % plot_freq == 0
         x = x.to(device)
-        y_pred, residual_sqnorm_by_iter, scale_by_iter, orth_loss, smoothness_loss = model(x)
+        y_pred, residual_sqnorm_by_iter, scale_by_iter, _, _, _ = model(x)
 
         loss_pred = loss_fn_pred(y_pred, y_true.to(device))
         loss_recon = residual_sqnorm_by_iter.mean()

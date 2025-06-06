@@ -121,15 +121,13 @@ class BlaschkeLayer1d(nn.Module):
         b_pred = rearrange(b_pred, '(b c) r p -> b c r p', b=B, c=C)          # [batch_size, num_channels, 2, seq_len]
         scale = rearrange(scale, '(b c) r -> b c r', b=B, c=C)                # [batch_size, num_channels, 2]
         assert b_pred.shape[2] == 2
-        # NOTE: Normally we could treat
+        # NOTE: We could treat
         # b_pred[:, :, 0, :] as the real part, and
         # b_pred[:, :, 1, :] as the imaginary part.
-        # However, this is an over-parameterization.
-        # A Blaschke factor only needs the phase.
+        # However, knowing that a Blaschke factor only needs the phase.
         # $B(t) = e^{i \theta(t)}$
-        # For simplicity, I will ignore the 2nd channel
-        # and take the first as the phase.
-        b_phase = b_pred[:, :, 0, :]
+        # We can first convert the (real, imag) to phase representation.
+        b_phase = torch.angle(b_pred[:, :, 0, :] + 1j * b_pred[:, :, 1, :])
         b_factor = torch.exp(1j * b_phase)
         assert scale.shape[2] == 2
         scale = scale[:, :, 0] + 1j * scale[:, :, 1]
@@ -448,17 +446,17 @@ class BlaschkeNetwork1d(nn.Module):
         for i in range(feature_bank.shape[-1]):
             for j in range(i + 1, feature_bank.shape[-1]):
                 curr_inner_prod = torch.sum(torch.conj(feature_bank[..., i]) * feature_bank[..., j], dim=-1).real
-                orth_loss += (curr_inner_prod ** 2).mean()
+                orth_loss += (curr_inner_prod.pow(2)).mean()
 
         for b_factor in blaschke_factors:
             phase = torch.angle(b_factor)  # [B, C, L]
             # Discrete approximation of the integral of the squared second derivative of the phase function.
-            smoothness_loss += torch.mean((phase[..., 2:] - 2 * phase[..., 1:-1] + phase[..., :-2]) ** 2)
+            smoothness_loss += torch.mean((phase[..., 2:] - 2 * phase[..., 1:-1] + phase[..., :-2]).pow(2))
 
         classifier_input = rearrange(feature_bank, 'b c l r d -> b 1 (c r d) l')
         y_pred = self.classifier(classifier_input)
 
-        return y_pred, residual_sqnorm_by_iter, scale_by_iter, orth_loss, smoothness_loss
+        return y_pred, residual_sqnorm_by_iter, scale_by_iter, feature_bank, orth_loss, smoothness_loss
 
 
     def to(self, device: str):
@@ -470,5 +468,5 @@ class BlaschkeNetwork1d(nn.Module):
 if __name__ == '__main__':
     model = BlaschkeNetwork1d(layers=3, signal_len=100, num_channels=10, patch_size=20, out_classes=10)
     signal = torch.normal(0, 1, size=(32, 10, 100))
-    y_pred, residual_sqnorm_by_iter, scale_by_iter, orth_loss, smoothness_loss = model(signal)
+    y_pred, residual_sqnorm_by_iter, scale_by_iter, feature_bank, orth_loss, smoothness_loss = model(signal)
     signal_complex, s_arr, B_prod_arr = model.test_approximate(signal[:1, :1, :])
