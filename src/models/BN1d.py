@@ -69,31 +69,32 @@ class BlaschkeLayer1d(nn.Module):
         where s_i is a scalar-valued scaling factor,
         and B_i is the i-th Blaschke factor.
 
+    This module predicts the scaling factor s_n and
+    the Blaschke product (B_1 * B_2 * ... * B_n) from a signal F_n.
+
     Attributes:
     -----------
-        b_factor_net (torch.nn.Module): Neural network to estimate Blaschke factors.
+        b_product_net (torch.nn.Module): Neural network to estimate Blaschke products.
         eps (float): Small number for numerical stability.
         device (torch.device): Torch device.
     '''
 
     def __init__(self,
-                 b_factor_net: torch.nn.Module,
+                 b_product_net: torch.nn.Module,
                  device: str = 'cpu') -> None:
 
         super().__init__()
 
-        self.b_factor_net = b_factor_net
-
+        self.b_product_net = b_product_net
         self.dummy_tensor = torch.ones(1, dtype=torch.float32, requires_grad=True)  # To facilitate checkpointing.
-
         self.to(device)
 
     def __repr__(self):
         return (f"BlaschkeLayer1d()")
 
-    def estimate_blaschke_factor(self, signal_complex: torch.Tensor) -> torch.Tensor:
+    def estimate_blaschke_product(self, signal_complex: torch.Tensor) -> torch.Tensor:
         '''
-        Estimate the Blaschke factor.
+        Estimate the Blaschke product.
         Using gradient checkpointing to trade time for space.
         Otherwise it is easy to OOM when using many layers.
 
@@ -112,26 +113,27 @@ class BlaschkeLayer1d(nn.Module):
         signal = rearrange(signal, 'b c r l -> (b c) r l')                    # [batch_size * num_channels, 2, seq_len]
         assert len(signal.shape) == 3
 
-        if any_requires_grad(self.b_factor_net):
+        if any_requires_grad(self.b_product_net):
             b_pred, scale = checkpoint(
-                self.b_factor_net, signal, self.dummy_tensor,
+                self.b_product_net, signal, self.dummy_tensor,
                 use_reentrant=False)                                          # [batch_size * num_channels, seq_len]
         else:
-            b_pred, scale = self.b_factor_net(signal, self.dummy_tensor)      # [batch_size * num_channels, seq_len]
+            b_pred, scale = self.b_product_net(signal, self.dummy_tensor)     # [batch_size * num_channels, seq_len]
         b_pred = rearrange(b_pred, '(b c) r p -> b c r p', b=B, c=C)          # [batch_size, num_channels, 2, seq_len]
         scale = rearrange(scale, '(b c) r -> b c r', b=B, c=C)                # [batch_size, num_channels, 2]
         assert b_pred.shape[2] == 2
         # NOTE: We could treat
         # b_pred[:, :, 0, :] as the real part, and
         # b_pred[:, :, 1, :] as the imaginary part.
-        # However, knowing that a Blaschke factor only needs the phase.
+        # However, knowing that a Blaschke product only needs the phase.
         # $B(t) = e^{i \theta(t)}$
+        # $\prod_k B_k(t) = e^{i \sum_k \theta_k(t)}$
         # We can first convert the (real, imag) to phase representation.
         b_phase = torch.angle(b_pred[:, :, 0, :] + 1j * b_pred[:, :, 1, :])
-        b_factor = torch.exp(1j * b_phase)
+        b_prod = torch.exp(1j * b_phase)
         assert scale.shape[2] == 2
         scale = scale[:, :, 0] + 1j * scale[:, :, 1]
-        return b_factor, scale
+        return b_prod, scale
 
     def to(self, device: str):
         super().to(device)
@@ -155,8 +157,8 @@ class BlaschkeLayer1d(nn.Module):
         assert len(signal_complex.shape) == 3
 
         # Compute the Blaschke factor $B_i$. [B, C, L]
-        blaschke_factor, scale = self.estimate_blaschke_factor(signal_complex)
-        return blaschke_factor, scale
+        blaschke_product, scale = self.estimate_blaschke_product(signal_complex)
+        return blaschke_product, scale
 
 
 class Ignore2ndArg(nn.Module):
@@ -197,10 +199,10 @@ class BlaschkeNetwork1d(nn.Module):
         detach_by_iter (bool): If true, penalize approximation of each iteration independently.
         out_classes (int): Number of output classes in the classification problem.
 
-        b_factor_net_dim (int): Param Net (Transformer) transformer dimension.
-        b_factor_net_depth (int): Param Net (Transformer) numbet of layers.
-        b_factor_net_heads (int): Param Net (Transformer) number of heads.
-        b_factor_net_mlp_dim (int): Param Net (Transformer) MLP dimension.
+        b_product_net_dim (int): Param Net (Transformer) transformer dimension.
+        b_product_net_depth (int): Param Net (Transformer) numbet of layers.
+        b_product_net_heads (int): Param Net (Transformer) number of heads.
+        b_product_net_mlp_dim (int): Param Net (Transformer) MLP dimension.
 
         eps (float): Small number for numerical stability.
         device (torch.device): Torch device.
@@ -214,10 +216,10 @@ class BlaschkeNetwork1d(nn.Module):
                  layers: int = 1,
                  detach_by_iter: bool = False,
                  out_classes: int = 10,
-                 b_factor_net_dim: int = 128,
-                 b_factor_net_depth: int = 3,
-                 b_factor_net_heads: int = 16,
-                 b_factor_net_mlp_dim: int = 512,
+                 b_product_net_dim: int = 128,
+                 b_product_net_depth: int = 3,
+                 b_product_net_heads: int = 16,
+                 b_product_net_mlp_dim: int = 512,
                  device: str = 'cpu',
                  seed: int = 1) -> None:
 
@@ -230,15 +232,15 @@ class BlaschkeNetwork1d(nn.Module):
         self.layers = layers
         self.detach_by_iter = detach_by_iter
 
-        b_factor_net = PatchTST(
+        b_product_net = PatchTST(
             num_channels=2,  # (real, imaginary) of signal
             patch_size=patch_size,
             num_patch=signal_len // patch_size,
-            n_layers=b_factor_net_depth,
-            n_heads=b_factor_net_heads,
-            d_model=b_factor_net_dim,
+            n_layers=b_product_net_depth,
+            n_heads=b_product_net_heads,
+            d_model=b_product_net_dim,
             shared_embedding=True,
-            d_ff=b_factor_net_mlp_dim,
+            d_ff=b_product_net_mlp_dim,
             dropout=0.2,
             head_dropout=0.2,
             act='gelu',
@@ -246,8 +248,8 @@ class BlaschkeNetwork1d(nn.Module):
             res_attention=False,
             num_classes=2,   # (real, imaginary) of scale
         )
-        self.b_factor_net = Ignore2ndArg(    # `Ignore2ndArg` is a wrapper to facilitate checkpointing.
-            convert_ln_to_dyt(b_factor_net)  # Replace layernorm with dynamic Tanh.
+        self.b_product_net = Ignore2ndArg(    # `Ignore2ndArg` is a wrapper to facilitate checkpointing.
+            convert_ln_to_dyt(b_product_net)  # Replace layernorm with dynamic Tanh.
         )
 
         # Initialize the BNLayers
@@ -255,7 +257,7 @@ class BlaschkeNetwork1d(nn.Module):
 
         for _ in range(self.layers):
             self.encoder.append(
-                BlaschkeLayer1d(b_factor_net=self.b_factor_net,
+                BlaschkeLayer1d(b_product_net=self.b_product_net,
                                 device=device)
             )
 
@@ -339,19 +341,11 @@ class BlaschkeNetwork1d(nn.Module):
         # Complexify the signal using hilbert transform.
         signal_complex = self.complexify(signal)
 
-        blaschke_factors = []
         s_arr, B_prod_arr = None, None
 
         residual_signal = signal_complex
         for layer in self.encoder:
-            factor, scale = layer(residual_signal)
-            blaschke_factors.append(factor)
-
-            # Blaschke product is the cumulative product of Blaschke factors
-            # B_1 * B_2 * ... * B_n.
-            blaschke_product = 1
-            for blaschke_factor in blaschke_factors:
-                blaschke_product = blaschke_product * blaschke_factor
+            blaschke_product, scale = layer(residual_signal)
 
             # The Blaschke approximation is given by
             # s_n * B_1 * B_2 * ... * B_n.
@@ -394,28 +388,20 @@ class BlaschkeNetwork1d(nn.Module):
         # Complexify the signal using hilbert transform.
         signal_complex = self.complexify(signal)
 
-        blaschke_factors = []
         residual_signal, feature_bank = signal_complex, None
         residual_sqnorm_by_iter, scale_by_iter = None, None
         orth_loss, smoothness_loss = torch.zeros(1).to(signal.device), torch.zeros(1).to(signal.device)
 
         for layer in self.encoder:
-            factor, scale = layer(residual_signal)
-            blaschke_factors.append(factor)
-
-            # Blaschke product is the cumulative product of Blaschke factors
-            # B_1 * B_2 * ... * B_n.
-            blaschke_product = blaschke_factors[-1]
-            for blaschke_factor in blaschke_factors[:-1]:
-                if self.detach_by_iter:
-                    # Detach the gradient so that each iteration is penalized separately.
-                    blaschke_product = blaschke_product * blaschke_factor.detach()
-                else:
-                    blaschke_product = blaschke_product * blaschke_factor
+            blaschke_product, scale = layer(residual_signal)
 
             # The Blaschke approximation is given by
             # s_n * B_1 * B_2 * ... * B_n.
             curr_signal_approx = scale[..., None] * blaschke_product
+
+            phase = torch.angle(blaschke_product)  # [B, C, L]
+            # Discrete approximation of the integral of the squared second derivative of the phase function.
+            smoothness_loss += torch.mean((phase[..., 2:] - 2 * phase[..., 1:-1] + phase[..., :-2]).pow(2))
 
             # F_{n+1} = F_n - s_n * B_1 * ... * B_n.
             if self.detach_by_iter:
@@ -447,11 +433,6 @@ class BlaschkeNetwork1d(nn.Module):
             for j in range(i + 1, feature_bank.shape[-1]):
                 curr_inner_prod = torch.sum(torch.conj(feature_bank[..., i]) * feature_bank[..., j], dim=-1).real
                 orth_loss += (curr_inner_prod.pow(2)).mean()
-
-        for b_factor in blaschke_factors:
-            phase = torch.angle(b_factor)  # [B, C, L]
-            # Discrete approximation of the integral of the squared second derivative of the phase function.
-            smoothness_loss += torch.mean((phase[..., 2:] - 2 * phase[..., 1:-1] + phase[..., :-2]).pow(2))
 
         classifier_input = rearrange(feature_bank, 'b c l r d -> b 1 (c r d) l')
         y_pred = self.classifier(classifier_input)
