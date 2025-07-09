@@ -372,7 +372,7 @@ if __name__ == '__main__':
     parser.add_argument('--only-final-iter', action='store_true')                 # Only penalize Blaschke decomposition in the final iteration.
     parser.add_argument('--lr', help='Learning rate.', type=float, default=1e-3)
     parser.add_argument('--batch-size', type=int, default=128)
-    parser.add_argument('--epoch', type=int, default=20)
+    parser.add_argument('--epoch', type=int, default=40)
     parser.add_argument('--n-plot-per-epoch', type=int, default=1)
     parser.add_argument('--loss-recon-coeff', type=float, default=1)
     parser.add_argument('--loss-orth-coeff', type=float, default=0)
