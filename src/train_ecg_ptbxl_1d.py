@@ -366,6 +366,7 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--subset', type=str, default='super_class')
+    parser.add_argument('--training-percentage', type=int, default=100)
     parser.add_argument('--layers', type=int, default=1)
     parser.add_argument('--detach-by-iter', action='store_true')                  # Independently optimize Blaschke decomposition per iteration.
     parser.add_argument('--only-final-iter', action='store_true')                 # Only penalize Blaschke decomposition in the final iteration.
@@ -377,17 +378,16 @@ if __name__ == '__main__':
     parser.add_argument('--loss-orth-coeff', type=float, default=0)
     parser.add_argument('--loss-smoothness-coeff', type=float, default=0)
     parser.add_argument('--loss-direct-coeff', type=float, default=0)             # Use the analytical Blaschke coeffs to supervise training.
-    parser.add_argument('--num-workers', type=int, default=8)
+    parser.add_argument('--num-workers', type=int, default=4)
     parser.add_argument('--random-seed', type=int, default=1)
-    parser.add_argument('--patch-size', type=int, default=1)
-    parser.add_argument('--training-percentage', type=int, default=100)
+    parser.add_argument('--patch-size', type=int, default=50)
     parser.add_argument('--data-dir', type=str, default='$ROOT_DIR/data/')
     args = SimpleNamespace(**vars(parser.parse_args()))
 
     ROOT_DIR = '/'.join(os.path.realpath(__file__).split('/')[:-2])
     args.data_dir = args.data_dir.replace('$ROOT_DIR', ROOT_DIR)
 
-    curr_run_identifier = f'ECG_PTBXL/subset={args.subset}--{args.training_percentage}%_BN1d-L{args.layers}_detach-{args.detach_by_iter}_final-{args.only_final_iter}_patch-{args.patch_size}_reconCoeff-{args.loss_recon_coeff}_orthCoeff-{args.loss_orth_coeff}_smoothnessCoeff-{args.loss_orth_coeff}_directCoeff-{args.loss_direct_coeff}_lr-{args.lr}_epoch-{args.epoch}_seed-{args.random_seed}'
+    curr_run_identifier = f'ECG_PTBXL/subset={args.subset}-{args.training_percentage}%_BN1d-L{args.layers}_detach-{args.detach_by_iter}_final-{args.only_final_iter}_patch-{args.patch_size}_reconCoeff-{args.loss_recon_coeff}_orthCoeff-{args.loss_orth_coeff}_smoothnessCoeff-{args.loss_orth_coeff}_directCoeff-{args.loss_direct_coeff}_lr-{args.lr}_epoch-{args.epoch}_seed-{args.random_seed}'
     args.results_dir = os.path.join(ROOT_DIR, 'results', curr_run_identifier)
     args.log_path = os.path.join(args.results_dir, 'log.txt')
     args.model_save_path = os.path.join(args.results_dir, 'model.pty')
