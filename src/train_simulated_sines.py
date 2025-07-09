@@ -120,7 +120,10 @@ def train_epoch(train_loader, model, optimizer, loss_fn_pred, num_classes, devic
         y_pred, residual_sqnorm_by_iter, pred_scale, pred_blaschke_factor, orth_loss, smoothness_loss = model(x)
 
         loss_pred = loss_fn_pred(y_pred, y_true.to(device))
-        loss_recon = residual_sqnorm_by_iter.mean() * args.loss_recon_coeff
+        if args.only_final_iter:
+            loss_recon = residual_sqnorm_by_iter[-1].mean() * args.loss_recon_coeff
+        else:
+            loss_recon = residual_sqnorm_by_iter.mean() * args.loss_recon_coeff
         loss_orth = orth_loss * args.loss_orth_coeff
         loss_smoothness = smoothness_loss * args.loss_smoothness_coeff
 
@@ -202,7 +205,10 @@ def infer(loader, model, loss_fn_pred, num_classes, device, epoch_idx):
         y_pred, residual_sqnorm_by_iter, scale_by_iter, _, _, _ = model(x)
 
         loss_pred = loss_fn_pred(y_pred, y_true.to(device))
-        loss_recon = residual_sqnorm_by_iter.mean()
+        if args.only_final_iter:
+            loss_recon = residual_sqnorm_by_iter[-1].mean() * args.loss_recon_coeff
+        else:
+            loss_recon = residual_sqnorm_by_iter.mean() * args.loss_recon_coeff
 
         avg_loss_pred += loss_pred.item()
         avg_loss_recon += loss_recon.item() * args.loss_recon_coeff
@@ -358,13 +364,14 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--layers', type=int, default=1)
     parser.add_argument('--detach-by-iter', action='store_true')                  # Independently optimize Blaschke decomposition per iteration.
+    parser.add_argument('--only-final-iter', action='store_true')                 # Only penalize Blaschke decomposition in the final iteration.
     parser.add_argument('--lr', help='Learning rate.', type=float, default=1e-3)
     parser.add_argument('--batch-size', type=int, default=128)
     parser.add_argument('--epoch', type=int, default=20)
     parser.add_argument('--n-plot-per-epoch', type=int, default=1)
     parser.add_argument('--loss-recon-coeff', type=float, default=1)
-    parser.add_argument('--loss-orth-coeff', type=float, default=10)
-    parser.add_argument('--loss-smoothness-coeff', type=float, default=1)
+    parser.add_argument('--loss-orth-coeff', type=float, default=0)
+    parser.add_argument('--loss-smoothness-coeff', type=float, default=0)
     parser.add_argument('--loss-direct-coeff', type=float, default=0)             # Use the analytical Blaschke coeffs to supervise training.
     parser.add_argument('--num-workers', type=int, default=8)
     parser.add_argument('--random-seed', type=int, default=1)
@@ -375,7 +382,7 @@ if __name__ == '__main__':
     ROOT_DIR = '/'.join(os.path.realpath(__file__).split('/')[:-2])
     args.data_path = args.data_path.replace('$ROOT_DIR', ROOT_DIR)
 
-    curr_run_identifier = f'Simulated_Sines/BN1d-L{args.layers}_detach-{args.detach_by_iter}_patch-{args.patch_size}_reconCoeff-{args.loss_recon_coeff}_orthCoeff-{args.loss_orth_coeff}_smoothnessCoeff-{args.loss_orth_coeff}_directCoeff-{args.loss_direct_coeff}_lr-{args.lr}_epoch-{args.epoch}_seed-{args.random_seed}'
+    curr_run_identifier = f'Simulated_Sines/BN1d-L{args.layers}_detach-{args.detach_by_iter}_final-{args.only_final_iter}_patch-{args.patch_size}_reconCoeff-{args.loss_recon_coeff}_orthCoeff-{args.loss_orth_coeff}_smoothnessCoeff-{args.loss_orth_coeff}_directCoeff-{args.loss_direct_coeff}_lr-{args.lr}_epoch-{args.epoch}_seed-{args.random_seed}'
     args.results_dir = os.path.join(ROOT_DIR, 'results', curr_run_identifier)
     args.log_path = os.path.join(args.results_dir, 'log.txt')
     args.model_save_path = os.path.join(args.results_dir, 'model.pty')
