@@ -14,24 +14,27 @@ from models.BN1d import BlaschkeNetwork1d
 from nn_utils.scheduler import LinearWarmupCosineAnnealingLR
 from nn_utils.seed import seed_everything
 from nn_utils.log import log, count_parameters
-from dataset.simulated_sines import SimulatedSineDataset
+from dataset.ecg_datasets import get_ecg_dataset
 from analytical.analytical_decomposition import blaschke_decomposition, display_blaschke_product
 
 
-def load_simulated_dataset(args):
-    dataset = SimulatedSineDataset(npz_path=args.data_path)
+def load_ptbxl(args):
+    data_path = os.path.join(args.data_dir, 'PTBXL')
 
-    total_size = len(dataset)
-    train_size = int(0.8 * total_size)
-    val_size = int(0.1 * total_size)
-    test_size = total_size - train_size - val_size
-    train_set, val_set, test_set = torch.utils.data.random_split(dataset, [train_size, val_size, test_size])
+    data_split_dir = os.path.join(args.data_dir, 'data_split', 'ptbxl', args.subset)
+    train_csv_path = os.path.join(data_split_dir, f'ptbxl_{args.subset}_train.csv')
+    val_csv_path = os.path.join(data_split_dir, f'ptbxl_{args.subset}_val.csv')
+    test_csv_path = os.path.join(data_split_dir, f'ptbxl_{args.subset}_test.csv')
+
+    train_set = get_ecg_dataset(data_path, train_csv_path, mode='train', dataset_name='ptbxl', ratio=args.training_percentage)
+    val_set = get_ecg_dataset(data_path, val_csv_path, mode='val', dataset_name='ptbxl')
+    test_set = get_ecg_dataset(data_path, test_csv_path, mode='test', dataset_name='ptbxl')
 
     train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
     val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
     test_loader = DataLoader(test_set, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
-    return train_loader, val_loader, test_loader, dataset.num_classes
+    return train_loader, val_loader, test_loader, train_set.num_classes
 
 
 def binary_entropy(batched_coeffs: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
@@ -262,11 +265,11 @@ def main(args):
     log(config_str, filepath=args.log_path, to_console=False)
 
     seed_everything(args.random_seed)
-    train_loader, val_loader, test_loader, num_classes = load_simulated_dataset(args)
+    train_loader, val_loader, test_loader, num_classes = load_ptbxl(args)
 
     model = BlaschkeNetwork1d(
-        signal_len=200,
-        num_channels=1,
+        signal_len=5000,
+        num_channels=12,
         layers=args.layers,
         detach_by_iter=args.detach_by_iter,
         patch_size=args.patch_size,
@@ -362,6 +365,7 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
+    parser.add_argument('--subset', type=str, default='super_class')
     parser.add_argument('--layers', type=int, default=1)
     parser.add_argument('--detach-by-iter', action='store_true')                  # Independently optimize Blaschke decomposition per iteration.
     parser.add_argument('--only-final-iter', action='store_true')                 # Only penalize Blaschke decomposition in the final iteration.
@@ -376,13 +380,14 @@ if __name__ == '__main__':
     parser.add_argument('--num-workers', type=int, default=8)
     parser.add_argument('--random-seed', type=int, default=1)
     parser.add_argument('--patch-size', type=int, default=1)
-    parser.add_argument('--data-path', type=str, default='$ROOT_DIR/data/simulated/simulated_sines.npz')
+    parser.add_argument('--training-percentage', type=int, default=100)
+    parser.add_argument('--data-dir', type=str, default='$ROOT_DIR/data/')
     args = SimpleNamespace(**vars(parser.parse_args()))
 
     ROOT_DIR = '/'.join(os.path.realpath(__file__).split('/')[:-2])
-    args.data_path = args.data_path.replace('$ROOT_DIR', ROOT_DIR)
+    args.data_dir = args.data_dir.replace('$ROOT_DIR', ROOT_DIR)
 
-    curr_run_identifier = f'Simulated_Sines/BN1d-L{args.layers}_detach-{args.detach_by_iter}_final-{args.only_final_iter}_patch-{args.patch_size}_reconCoeff-{args.loss_recon_coeff}_orthCoeff-{args.loss_orth_coeff}_smoothnessCoeff-{args.loss_orth_coeff}_directCoeff-{args.loss_direct_coeff}_lr-{args.lr}_epoch-{args.epoch}_seed-{args.random_seed}'
+    curr_run_identifier = f'ECG_PTBXL/subset={args.subset}--{args.training_percentage}%_BN1d-L{args.layers}_detach-{args.detach_by_iter}_final-{args.only_final_iter}_patch-{args.patch_size}_reconCoeff-{args.loss_recon_coeff}_orthCoeff-{args.loss_orth_coeff}_smoothnessCoeff-{args.loss_orth_coeff}_directCoeff-{args.loss_direct_coeff}_lr-{args.lr}_epoch-{args.epoch}_seed-{args.random_seed}'
     args.results_dir = os.path.join(ROOT_DIR, 'results', curr_run_identifier)
     args.log_path = os.path.join(args.results_dir, 'log.txt')
     args.model_save_path = os.path.join(args.results_dir, 'model.pty')
